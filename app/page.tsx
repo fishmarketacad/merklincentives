@@ -40,6 +40,7 @@ interface ProtocolDEXVolume {
     volume7d: number | null;
     volume30d: number | null;
     isHistorical: boolean;
+    isMonadSpecific: boolean; // True if Monad-specific, false if all-chain fallback
   };
 }
 
@@ -485,19 +486,34 @@ function HomeContent() {
                         {dexVolume && (dexVolume.volumeInRange !== null || dexVolume.volume7d !== null || dexVolume.volume30d !== null) && (
                           <span className="text-sm text-green-400 font-semibold bg-green-500/10 px-2 py-1 rounded flex items-center gap-1">
                             {dexVolume.volumeInRange !== null ? (
-                              <span title={`DEX Volume for your date range (${startDate} to ${endDate})`}>
+                              <span title={`DEX Volume for your date range (${startDate} to ${endDate})${!dexVolume.isMonadSpecific ? ' - Note: This is all-chain volume, not Monad-specific' : ''}`}>
                                 {formatVolume(dexVolume.volumeInRange)} Vol
                               </span>
                             ) : dexVolume.volume7d !== null ? (
-                              <span title="DEX Volume (7d) - Date range volume not available, showing 7d as fallback">
+                              <span title={`DEX Volume (7d) - Date range volume not available, showing 7d as fallback${!dexVolume.isMonadSpecific ? ' - Note: This is all-chain volume, not Monad-specific' : ''}`}>
                                 {formatVolume(dexVolume.volume7d)} Vol 7d
                               </span>
                             ) : dexVolume.volume30d !== null ? (
-                              <span title="DEX Volume (30d) - Date range volume not available, showing 30d as fallback">
+                              <span title={`DEX Volume (30d) - Date range volume not available, showing 30d as fallback${!dexVolume.isMonadSpecific ? ' - Note: This is all-chain volume, not Monad-specific' : ''}`}>
                                 {formatVolume(dexVolume.volume30d)} Vol 30d
                               </span>
                             ) : null}
-                            {!dexVolume.isHistorical && (
+                            {!dexVolume.isMonadSpecific && (
+                              <span 
+                                className="inline-flex items-center cursor-help text-yellow-400"
+                                title="⚠️ WARNING: This volume is all-chain (not Monad-specific). DeFiLlama does not provide Monad-specific volume breakdown for this protocol, so we're showing total volume across all chains. This number will be much higher than actual Monad volume."
+                              >
+                                <svg 
+                                  className="w-3 h-3" 
+                                  fill="none" 
+                                  stroke="currentColor" 
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                              </span>
+                            )}
+                            {dexVolume.isMonadSpecific && !dexVolume.isHistorical && (
                               <span 
                                 className="inline-flex items-center cursor-help"
                                 title="This volume is current (not historical). Historical volume data for this date range is not available from DeFiLlama."
