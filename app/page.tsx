@@ -116,6 +116,9 @@ function HomeContent() {
     'upshift',
     'townsquare',
     'uniswap', // Added: Uniswap protocol
+    'beefy',
+    'accountable',
+    'curve',
   ];
 
   const toggleProtocol = (protocol: string) => {

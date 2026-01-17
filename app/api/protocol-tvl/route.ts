@@ -16,6 +16,9 @@ const PROTOCOL_SLUG_MAP: Record<string, string> = {
   'renzo': 'renzo',
   'upshift': 'upshift',
   'townsquare': 'townsquare',
+  'beefy': 'beefy',
+  'accountable': 'accountable',
+  'curve': 'curve',
 };
 
 /**
