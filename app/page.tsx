@@ -452,26 +452,26 @@ function HomeContent() {
                         
                         <div className="ml-6 space-y-1">
                           {funding.markets.map((market, marketIdx) => (
-                            <div key={marketIdx} className="flex justify-between items-center text-sm text-gray-400 py-1">
-                              <div className="flex items-center gap-2 truncate max-w-md">
+                            <div key={marketIdx} className="flex justify-between items-center text-sm text-gray-400 py-1 gap-4">
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
                                 {market.merklUrl ? (
                                   <a
                                     href={market.merklUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="font-medium hover:text-purple-400 transition-colors underline decoration-purple-500/50 hover:decoration-purple-400"
+                                    className="font-medium hover:text-purple-400 transition-colors underline decoration-purple-500/50 hover:decoration-purple-400 truncate min-w-0"
                                     title={`View ${market.marketName} on Merkl`}
                                   >
                                     {market.marketName}
                                   </a>
                                 ) : (
-                                  <span className="font-medium" title={market.marketName}>
+                                  <span className="font-medium truncate min-w-0" title={market.marketName}>
                                     {market.marketName}
                                   </span>
                                 )}
                                 {market.apr !== undefined && (
                                   <span 
-                                    className="text-xs text-purple-400 font-semibold bg-purple-500/10 px-2 py-0.5 rounded cursor-help"
+                                    className="text-xs text-purple-400 font-semibold bg-purple-500/10 px-2 py-0.5 rounded cursor-help flex-shrink-0"
                                     title="APR (Annual Percentage Rate) represents the annualized return from Merkl incentives. This value shows the APR at the end of your selected date range, calculated from campaign metrics. APR = (Daily Rewards / TVL) × 365 × 100"
                                   >
                                     {market.apr.toFixed(2)}% APR
@@ -479,7 +479,7 @@ function HomeContent() {
                                 )}
                                 {market.tvl !== undefined && (
                                   <span 
-                                    className="text-xs text-blue-400 font-semibold bg-blue-500/10 px-2 py-0.5 rounded cursor-help"
+                                    className="text-xs text-blue-400 font-semibold bg-blue-500/10 px-2 py-0.5 rounded cursor-help flex-shrink-0"
                                     title="TVL (Total Value Locked) shows the total value locked in this market at the end of your selected date range, in USD"
                                   >
                                     {market.tvl >= 1000000 
@@ -490,7 +490,7 @@ function HomeContent() {
                                   </span>
                                 )}
                               </div>
-                              <span className="ml-4 whitespace-nowrap text-gray-300 font-semibold">
+                              <span className="whitespace-nowrap text-gray-300 font-semibold flex-shrink-0">
                                 {market.totalMON.toLocaleString(undefined, {
                                   minimumFractionDigits: 2,
                                   maximumFractionDigits: 2,
