@@ -10,7 +10,8 @@ const PROTOCOL_SLUG_MAP: Record<string, string> = {
   'kuru': 'kuru',
   'morpho': 'morpho',
   'euler': 'euler',
-  'pancakeswap': 'pancakeswap-v3',
+  'pancake-swap': 'pancakeswap-v3', // Merkl uses "pancake-swap", DeFiLlama uses "pancakeswap-v3"
+  'uniswap': 'uniswap', // Added: Uniswap protocol
   'monday-trade': 'monday-trade',
   'renzo': 'renzo',
   'upshift': 'upshift',

@@ -109,11 +109,12 @@ function HomeContent() {
     'kuru',
     'morpho',
     'euler',
-    'pancakeswap',
+    'pancake-swap', // Note: Merkl uses "pancake-swap" with hyphen
     'monday-trade',
     'renzo',
     'upshift',
     'townsquare',
+    'uniswap', // Added: Uniswap protocol
   ];
 
   const toggleProtocol = (protocol: string) => {
