@@ -416,11 +416,12 @@ export async function POST(request: NextRequest) {
     const tvlData: Record<string, number | null> = {};
     const tvlMetadata: Record<string, { isHistorical: boolean }> = {};
     const dexVolumeData: Record<string, {
+      volumeInRange: number | null;
       volume24h: number | null;
       volume7d: number | null;
       volume30d: number | null;
-      volumeAtDate: number | null;
       isHistorical: boolean;
+      isMonadSpecific: boolean;
     }> = {};
     
     for (const protocol of protocols) {
@@ -447,6 +448,7 @@ export async function POST(request: NextRequest) {
           volume7d: null,
           volume30d: null,
           isHistorical: false,
+          isMonadSpecific: false,
         };
       }
     }
