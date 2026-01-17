@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 interface MarketResult {
@@ -33,7 +33,7 @@ interface ProtocolTVLMetadata {
   };
 }
 
-export default function Home() {
+function HomeContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   
@@ -542,5 +542,17 @@ export default function Home() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center">
+        <div className="text-white text-xl">Loading...</div>
+      </div>
+    }>
+      <HomeContent />
+    </Suspense>
   );
 }
