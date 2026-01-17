@@ -478,7 +478,7 @@ export async function POST(request: NextRequest) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    // Format results for API response and calculate protocol-level TVL from Merkl
+    // Format results for API response
     const results = Object.values(platformData)
       .map(platform => ({
         platformProtocol: platform.platformProtocol,
@@ -501,38 +501,9 @@ export async function POST(request: NextRequest) {
       }))
       .sort((a, b) => a.platformProtocol.localeCompare(b.platformProtocol));
 
-    // Calculate protocol-level TVL by summing all market TVLs for each protocol
-    const protocolTVLFromMerkl: Record<string, number> = {};
-    for (const platform of results) {
-      let totalTVL = 0;
-      // Collect unique market TVLs (avoid double-counting if same market appears multiple times)
-      const marketTVLs = new Map<string, number>();
-      
-      for (const funding of platform.fundingProtocols) {
-        for (const market of funding.markets) {
-          if (market.tvl !== undefined && market.tvl > 0) {
-            // Use market name as key to avoid double-counting same market
-            if (!marketTVLs.has(market.marketName) || marketTVLs.get(market.marketName)! < market.tvl) {
-              marketTVLs.set(market.marketName, market.tvl);
-            }
-          }
-        }
-      }
-      
-      // Sum all unique market TVLs
-      for (const tvl of marketTVLs.values()) {
-        totalTVL += tvl;
-      }
-      
-      if (totalTVL > 0) {
-        protocolTVLFromMerkl[platform.platformProtocol.toLowerCase()] = parseFloat(totalTVL.toFixed(2));
-      }
-    }
-
     return NextResponse.json({
       success: true,
       results,
-      protocolTVLFromMerkl, // Add protocol TVL calculated from Merkl market TVLs
       dateRange: {
         start: startDate,
         end: endDate,
