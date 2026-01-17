@@ -201,14 +201,19 @@ function HomeContent() {
 
       setResults(monSpentData.results || []);
 
-      // Update TVL and DEX volume data
+      // Use Merkl TVL for protocol-level TVL (sum of all market TVLs)
+      if (monSpentData.protocolTVLFromMerkl) {
+        setProtocolTVL(monSpentData.protocolTVLFromMerkl);
+        // Mark all as historical since they're from Merkl campaign metrics
+        const merklTVLMetadata: ProtocolTVLMetadata = {};
+        for (const protocol in monSpentData.protocolTVLFromMerkl) {
+          merklTVLMetadata[protocol] = { isHistorical: true };
+        }
+        setProtocolTVLMetadata(merklTVLMetadata);
+      }
+
+      // Update DEX volume data (still from DeFiLlama)
       const tvlData = await tvlResponse.json();
-      if (tvlData.success && tvlData.tvlData) {
-        setProtocolTVL(tvlData.tvlData);
-      }
-      if (tvlData.success && tvlData.tvlMetadata) {
-        setProtocolTVLMetadata(tvlData.tvlMetadata);
-      }
       if (tvlData.success && tvlData.dexVolumeData) {
         setProtocolDEXVolume(tvlData.dexVolumeData);
       }
@@ -239,6 +244,7 @@ function HomeContent() {
     
     for (const platform of results) {
       const protocolKey = platform.platformProtocol.toLowerCase();
+      // Use Merkl TVL (sum of market TVLs) instead of DeFiLlama TVL
       const protocolTVLValue = protocolTVL[protocolKey];
       const dexVolume = protocolDEXVolume[protocolKey];
       const volumeValue = dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
@@ -248,7 +254,8 @@ function HomeContent() {
           // Format MON value - use toFixed to avoid commas in CSV
           const monFormatted = market.totalMON.toFixed(2);
           
-          // Format TVL value - use toFixed to avoid commas in CSV
+          // Format TVL value - use Merkl protocol TVL (sum of all markets)
+          // Use toFixed to avoid commas in CSV
           const tvlFormatted = protocolTVLValue !== null && protocolTVLValue !== undefined
             ? protocolTVLValue.toFixed(2)
             : '';
