@@ -33,6 +33,16 @@ interface ProtocolTVLMetadata {
   };
 }
 
+interface ProtocolDEXVolume {
+  [protocol: string]: {
+    volume24h: number | null;
+    volume7d: number | null;
+    volume30d: number | null;
+    volumeAtDate: number | null;
+    isHistorical: boolean;
+  };
+}
+
 function HomeContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -47,6 +57,7 @@ function HomeContent() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [protocolTVL, setProtocolTVL] = useState<ProtocolTVL>({});
   const [protocolTVLMetadata, setProtocolTVLMetadata] = useState<ProtocolTVLMetadata>({});
+  const [protocolDEXVolume, setProtocolDEXVolume] = useState<ProtocolDEXVolume>({});
   
   // Read URL parameters on mount
   useEffect(() => {
@@ -187,13 +198,16 @@ function HomeContent() {
 
       setResults(monSpentData.results || []);
 
-      // Update TVL data
+      // Update TVL and DEX volume data
       const tvlData = await tvlResponse.json();
       if (tvlData.success && tvlData.tvlData) {
         setProtocolTVL(tvlData.tvlData);
       }
       if (tvlData.success && tvlData.tvlMetadata) {
         setProtocolTVLMetadata(tvlData.tvlMetadata);
+      }
+      if (tvlData.success && tvlData.dexVolumeData) {
+        setProtocolDEXVolume(tvlData.dexVolumeData);
       }
     } catch (err: any) {
       setError(err.message || 'An error occurred');
@@ -392,11 +406,24 @@ function HomeContent() {
                 const protocolTVLValue = protocolTVL[protocolKey];
                 const tvlMetadata = protocolTVLMetadata[protocolKey];
                 const isHistorical = tvlMetadata?.isHistorical ?? false;
+                const dexVolume = protocolDEXVolume[protocolKey];
+                
+                // Format volume helper function
+                const formatVolume = (volume: number | null | undefined) => {
+                  if (volume === null || volume === undefined) return null;
+                  if (volume >= 1000000) {
+                    return `$${(volume / 1000000).toFixed(2)}M`;
+                  } else if (volume >= 1000) {
+                    return `$${(volume / 1000).toFixed(2)}K`;
+                  } else {
+                    return `$${volume.toFixed(2)}`;
+                  }
+                };
                 
                 return (
                   <div key={platformIdx} className="border-l-4 border-purple-500/50 pl-4 py-2 hover:border-purple-500 transition-all">
                     <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-700">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 flex-wrap">
                         <h3 className="text-xl font-bold text-white capitalize flex items-center gap-2">
                           <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
                           {platform.platformProtocol.replace('-', ' ')} Protocol
@@ -412,6 +439,40 @@ function HomeContent() {
                               <span 
                                 className="inline-flex items-center cursor-help"
                                 title="This TVL is current (not historical). Historical TVL data for this date range is not available from DeFiLlama, so we're showing the current TVL instead."
+                              >
+                                <svg 
+                                  className="w-3 h-3" 
+                                  fill="none" 
+                                  stroke="currentColor" 
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              </span>
+                            )}
+                          </span>
+                        )}
+                        {dexVolume && (dexVolume.volume30d !== null || dexVolume.volume7d !== null || dexVolume.volumeAtDate !== null) && (
+                          <span className="text-sm text-green-400 font-semibold bg-green-500/10 px-2 py-1 rounded flex items-center gap-1">
+                            {dexVolume.volume30d !== null && (
+                              <span title="DEX Volume (30d)">
+                                {formatVolume(dexVolume.volume30d)} Vol 30d
+                              </span>
+                            )}
+                            {dexVolume.volume30d === null && dexVolume.volume7d !== null && (
+                              <span title="DEX Volume (7d)">
+                                {formatVolume(dexVolume.volume7d)} Vol 7d
+                              </span>
+                            )}
+                            {dexVolume.volume30d === null && dexVolume.volume7d === null && dexVolume.volumeAtDate !== null && (
+                              <span title="DEX Volume at end date">
+                                {formatVolume(dexVolume.volumeAtDate)} Vol
+                              </span>
+                            )}
+                            {!dexVolume.isHistorical && (
+                              <span 
+                                className="inline-flex items-center cursor-help"
+                                title="This volume is current (not historical). Historical volume data for this date range is not available from DeFiLlama."
                               >
                                 <svg 
                                   className="w-3 h-3" 
