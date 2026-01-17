@@ -220,13 +220,41 @@ function HomeContent() {
   const exportToCSV = () => {
     if (results.length === 0) return;
 
-    const csvLines = ['Platform Protocol,Funding Protocol,Market,Total MON'];
+    // Format dates for CSV headers
+    const formatDateForCSV = (dateStr: string) => {
+      if (!dateStr) return '';
+      const date = new Date(dateStr + 'T00:00:00Z');
+      return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+    };
+
+    const endDateFormatted = formatDateForCSV(endDate);
+    const startDateFormatted = formatDateForCSV(startDate);
+    const dateRangeFormatted = `${startDateFormatted} - ${endDateFormatted}`;
+
+    const csvLines = [
+      `Platform Protocol,Funding Protocol,Market,Incentive,"TVL (as of ${endDateFormatted})","Volume (${dateRangeFormatted})"`
+    ];
     
     for (const platform of results) {
+      const protocolKey = platform.platformProtocol.toLowerCase();
+      const protocolTVLValue = protocolTVL[protocolKey];
+      const dexVolume = protocolDEXVolume[protocolKey];
+      const volumeValue = dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
+      
       for (const funding of platform.fundingProtocols) {
         for (const market of funding.markets) {
+          // Format TVL value
+          const tvlFormatted = protocolTVLValue !== null && protocolTVLValue !== undefined
+            ? protocolTVLValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : '';
+          
+          // Format Volume value
+          const volumeFormatted = volumeValue !== null && volumeValue !== undefined
+            ? volumeValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : '';
+          
           csvLines.push(
-            `${platform.platformProtocol},${funding.fundingProtocol},"${market.marketName}",${market.totalMON}`
+            `${platform.platformProtocol},${funding.fundingProtocol},"${market.marketName}",${market.totalMON.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })},${tvlFormatted},${volumeFormatted}`
           );
         }
       }
@@ -386,7 +414,7 @@ function HomeContent() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                     <span>
-                      <strong>APR</strong> and <strong>TVL</strong> are historical values at the end of your date range, not the current values.
+                      <strong>APR</strong>, <strong>TVL</strong>, and <strong>Volume</strong> are historical values at the end of your date range, not the current values.
                     </span>
                 </div>
               </div>
