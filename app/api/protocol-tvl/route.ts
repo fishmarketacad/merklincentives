@@ -112,11 +112,11 @@ function calculateVolumeInRange(volumeHistory: any[], startTimestamp: number, en
 /**
  * Fetch DEX volume from DeFiLlama API
  */
-async function fetchDEXVolume(protocolSlug: string, endTimestamp: number): Promise<{ 
+async function fetchDEXVolume(protocolSlug: string, startTimestamp: number, endTimestamp: number): Promise<{ 
+  volumeInRange: number | null; // Volume for the exact date range
   volume24h: number | null;
   volume7d: number | null;
   volume30d: number | null;
-  volumeAtDate: number | null;
   isHistorical: boolean;
 }> {
   try {
@@ -125,9 +125,9 @@ async function fetchDEXVolume(protocolSlug: string, endTimestamp: number): Promi
     
     if (!response.ok) {
       if (response.status === 404) {
-        return { volume24h: null, volume7d: null, volume30d: null, volumeAtDate: null, isHistorical: false };
+        return { volumeInRange: null, volume24h: null, volume7d: null, volume30d: null, isHistorical: false };
       }
-      return { volume24h: null, volume7d: null, volume30d: null, volumeAtDate: null, isHistorical: false };
+      return { volumeInRange: null, volume24h: null, volume7d: null, volume30d: null, isHistorical: false };
     }
     
     const data = await response.json();
@@ -135,38 +135,37 @@ async function fetchDEXVolume(protocolSlug: string, endTimestamp: number): Promi
     // Get current 24h volume
     const volume24h = data.total24h !== undefined ? parseFloat(String(data.total24h)) : null;
     
-    // Calculate historical volumes from totalDataChart
+    // Calculate volumes from totalDataChart
+    let volumeInRange: number | null = null;
     let volume7d: number | null = null;
     let volume30d: number | null = null;
-    let volumeAtDate: number | null = null;
     let isHistorical = false;
     
     if (data.totalDataChart && Array.isArray(data.totalDataChart) && data.totalDataChart.length > 0) {
+      // Calculate volume for the exact date range
+      volumeInRange = calculateVolumeInRange(data.totalDataChart, startTimestamp, endTimestamp);
+      
+      // Also calculate 7d and 30d as fallbacks/reference
       const sevenDaysAgo = endTimestamp - (7 * 24 * 60 * 60);
       const thirtyDaysAgo = endTimestamp - (30 * 24 * 60 * 60);
-      
-      // Calculate 7d and 30d volumes
       volume7d = calculateVolumeInRange(data.totalDataChart, sevenDaysAgo, endTimestamp);
       volume30d = calculateVolumeInRange(data.totalDataChart, thirtyDaysAgo, endTimestamp);
       
-      // Get volume at the end date
-      volumeAtDate = getVolumeAtDate(data.totalDataChart, endTimestamp);
-      
-      if (volumeAtDate !== null || volume7d !== null || volume30d !== null) {
+      if (volumeInRange !== null || volume7d !== null || volume30d !== null) {
         isHistorical = true;
       }
     }
     
     return {
+      volumeInRange,
       volume24h,
       volume7d,
       volume30d,
-      volumeAtDate,
       isHistorical,
     };
   } catch (error) {
     console.error(`Error fetching DEX volume for ${protocolSlug}:`, error);
-    return { volume24h: null, volume7d: null, volume30d: null, volumeAtDate: null, isHistorical: false };
+    return { volumeInRange: null, volume24h: null, volume7d: null, volume30d: null, isHistorical: false };
   }
 }
 
@@ -229,7 +228,7 @@ async function fetchProtocolTVL(protocolSlug: string, endTimestamp: number): Pro
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { protocols, endDate } = body;
+    const { protocols, startDate, endDate } = body;
 
     if (!protocols || !Array.isArray(protocols) || protocols.length === 0) {
       return NextResponse.json(
@@ -238,8 +237,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Convert end date to timestamp for historical TVL lookup
+    // Convert dates to timestamps for historical lookup
+    let startTimestamp = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60); // Default to 30 days ago
     let endTimestamp = Math.floor(Date.now() / 1000); // Default to current time
+    
+    if (startDate) {
+      const start = new Date(startDate + 'T00:00:00Z');
+      if (!isNaN(start.getTime())) {
+        startTimestamp = Math.floor(start.getTime() / 1000);
+      }
+    }
+    
     if (endDate) {
       const end = new Date(endDate + 'T23:59:59Z');
       if (!isNaN(end.getTime())) {
@@ -264,7 +272,7 @@ export async function POST(request: NextRequest) {
         // Fetch TVL and DEX volume in parallel
         const [tvlResult, dexVolumeResult] = await Promise.all([
           fetchProtocolTVL(protocolSlug, endTimestamp),
-          fetchDEXVolume(protocolSlug, endTimestamp),
+          fetchDEXVolume(protocolSlug, startTimestamp, endTimestamp),
         ]);
         
         tvlData[protocol] = tvlResult.tvl;
@@ -277,10 +285,10 @@ export async function POST(request: NextRequest) {
         tvlData[protocol] = null;
         tvlMetadata[protocol] = { isHistorical: false };
         dexVolumeData[protocol] = {
+          volumeInRange: null,
           volume24h: null,
           volume7d: null,
           volume30d: null,
-          volumeAtDate: null,
           isHistorical: false,
         };
       }

@@ -35,10 +35,10 @@ interface ProtocolTVLMetadata {
 
 interface ProtocolDEXVolume {
   [protocol: string]: {
+    volumeInRange: number | null; // Volume for the exact date range
     volume24h: number | null;
     volume7d: number | null;
     volume30d: number | null;
-    volumeAtDate: number | null;
     isHistorical: boolean;
   };
 }
@@ -186,7 +186,8 @@ function HomeContent() {
           },
           body: JSON.stringify({
             protocols,
-            endDate, // Pass end date for historical TVL lookup
+            startDate, // Pass start date for volume range calculation
+            endDate, // Pass end date for historical TVL and volume lookup
           }),
         }),
       ]);
@@ -452,23 +453,21 @@ function HomeContent() {
                             )}
                           </span>
                         )}
-                        {dexVolume && (dexVolume.volume30d !== null || dexVolume.volume7d !== null || dexVolume.volumeAtDate !== null) && (
+                        {dexVolume && (dexVolume.volumeInRange !== null || dexVolume.volume7d !== null || dexVolume.volume30d !== null) && (
                           <span className="text-sm text-green-400 font-semibold bg-green-500/10 px-2 py-1 rounded flex items-center gap-1">
-                            {dexVolume.volume30d !== null && (
-                              <span title="DEX Volume (30d)">
-                                {formatVolume(dexVolume.volume30d)} Vol 30d
+                            {dexVolume.volumeInRange !== null ? (
+                              <span title={`DEX Volume for your date range (${startDate} to ${endDate})`}>
+                                {formatVolume(dexVolume.volumeInRange)} Vol
                               </span>
-                            )}
-                            {dexVolume.volume30d === null && dexVolume.volume7d !== null && (
-                              <span title="DEX Volume (7d)">
+                            ) : dexVolume.volume7d !== null ? (
+                              <span title="DEX Volume (7d) - Date range volume not available, showing 7d as fallback">
                                 {formatVolume(dexVolume.volume7d)} Vol 7d
                               </span>
-                            )}
-                            {dexVolume.volume30d === null && dexVolume.volume7d === null && dexVolume.volumeAtDate !== null && (
-                              <span title="DEX Volume at end date">
-                                {formatVolume(dexVolume.volumeAtDate)} Vol
+                            ) : dexVolume.volume30d !== null ? (
+                              <span title="DEX Volume (30d) - Date range volume not available, showing 30d as fallback">
+                                {formatVolume(dexVolume.volume30d)} Vol 30d
                               </span>
-                            )}
+                            ) : null}
                             {!dexVolume.isHistorical && (
                               <span 
                                 className="inline-flex items-center cursor-help"
