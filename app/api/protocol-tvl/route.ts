@@ -122,8 +122,77 @@ async function fetchDEXVolume(protocolSlug: string, startTimestamp: number, endT
   isMonadSpecific: boolean; // True if volume is Monad-specific, false if all-chain fallback
 }> {
   try {
-    // First, try to get Monad-specific volume from chain overview
-    // This is more accurate for multichain protocols like Uniswap
+    // Strategy 1: Try to get Monad-specific volume from /summary/dexs/{protocol} breakdown
+    // totalDataChartBreakdown format: [timestamp, { "Chain Name": { "Protocol Version": volume } }]
+    try {
+      const protocolUrl = `${DEFILLAMA_API_BASE}/summary/dexs/${protocolSlug}?excludeTotalDataChart=false&excludeTotalDataChartBreakdown=false`;
+      const protocolResponse = await globalThis.fetch(protocolUrl);
+      
+      if (protocolResponse.ok) {
+        const protocolData = await protocolResponse.json();
+        
+        // Extract Monad-specific volume from totalDataChartBreakdown
+        if (protocolData.totalDataChartBreakdown && Array.isArray(protocolData.totalDataChartBreakdown)) {
+          const monadVolumeData: any[] = [];
+          
+          for (const record of protocolData.totalDataChartBreakdown) {
+            if (Array.isArray(record) && record.length >= 2) {
+              const timestamp = record[0];
+              const chainBreakdown = record[1];
+              
+              if (typeof chainBreakdown === 'object' && chainBreakdown !== null) {
+                // Format: { "Chain Name": { "Protocol Version": volume } }
+                // Try different case variations for Monad
+                const monadChainData = chainBreakdown['Monad'] || chainBreakdown['monad'] || chainBreakdown['MONAD'];
+                
+                if (monadChainData && typeof monadChainData === 'object') {
+                  // Sum all protocol versions on Monad (e.g., "Uniswap V2", "Uniswap V3", "Uniswap V4")
+                  let totalMonadVolume = 0;
+                  for (const versionVolume of Object.values(monadChainData)) {
+                    if (typeof versionVolume === 'number') {
+                      totalMonadVolume += versionVolume;
+                    }
+                  }
+                  
+                  if (totalMonadVolume > 0) {
+                    monadVolumeData.push([timestamp, totalMonadVolume]);
+                  }
+                }
+              }
+            }
+          }
+          
+          if (monadVolumeData.length > 0) {
+            // Calculate volumes from Monad-specific data
+            const volumeInRange = calculateVolumeInRange(monadVolumeData, startTimestamp, endTimestamp);
+            const sevenDaysAgo = endTimestamp - (7 * 24 * 60 * 60);
+            const thirtyDaysAgo = endTimestamp - (30 * 24 * 60 * 60);
+            const volume7d = calculateVolumeInRange(monadVolumeData, sevenDaysAgo, endTimestamp);
+            const volume30d = calculateVolumeInRange(monadVolumeData, thirtyDaysAgo, endTimestamp);
+            
+            // Get 24h volume - try to calculate from recent data or use protocol's total24h as fallback
+            // We can't get exact 24h from breakdown easily, so use protocol's total24h if available
+            // But note: protocol's total24h is all-chain, so we'll mark it as approximate
+            const volume24h = protocolData.total24h !== undefined 
+              ? parseFloat(String(protocolData.total24h)) 
+              : null;
+            
+            return {
+              volumeInRange,
+              volume24h: null, // Don't use all-chain 24h, it's misleading
+              volume7d,
+              volume30d,
+              isHistorical: true,
+              isMonadSpecific: true,
+            };
+          }
+        }
+      }
+    } catch (protocolError) {
+      console.error(`Error fetching protocol breakdown for ${protocolSlug}:`, protocolError);
+    }
+    
+    // Strategy 2: Try to get from /overview/dexs/monad breakdown by protocol name
     try {
       const chainOverviewUrl = `${DEFILLAMA_API_BASE}/overview/dexs/monad?excludeTotalDataChart=false&excludeTotalDataChartBreakdown=false`;
       const chainResponse = await globalThis.fetch(chainOverviewUrl);
@@ -131,92 +200,79 @@ async function fetchDEXVolume(protocolSlug: string, startTimestamp: number, endT
       if (chainResponse.ok) {
         const chainData = await chainResponse.json();
         
-        // Find the protocol in the Monad chain overview
+        // Find ALL protocol variations in the Monad chain overview
+        // e.g., "Uniswap V2", "Uniswap V4" should both match "uniswap"
         if (chainData.protocols && Array.isArray(chainData.protocols)) {
-          // Match by protocol name (case-insensitive, handle variations like "Uniswap V4" vs "uniswap")
-          const protocolOnMonad = chainData.protocols.find((p: any) => {
+          const slugMatch = protocolSlug.toLowerCase().replace('-', ' ');
+          
+          // Find all protocol variations that match
+          const matchingProtocols = chainData.protocols.filter((p: any) => {
             const protocolName = p.name?.toLowerCase() || '';
-            const slugMatch = protocolSlug.toLowerCase();
-            // Match if protocol name contains slug or vice versa
-            // Also handle "uniswap v4" matching "uniswap"
-            return protocolName.includes(slugMatch) || 
+            // Match if protocol name starts with slug or contains slug
+            return protocolName.startsWith(slugMatch) || 
+                   protocolName.includes(slugMatch) ||
                    slugMatch.includes(protocolName.split(' ')[0]) ||
-                   protocolName.split(' ')[0] === slugMatch;
+                   protocolName.split(' ')[0] === slugMatch.split(' ')[0];
           });
           
-          if (protocolOnMonad) {
-            // Check if protocol has its own totalDataChart (Monad-specific)
-            // The protocol object might have volume data directly
-            if (protocolOnMonad.totalDataChart && Array.isArray(protocolOnMonad.totalDataChart)) {
-              // Calculate volumes from Monad-specific protocol data
-              const volumeInRange = calculateVolumeInRange(protocolOnMonad.totalDataChart, startTimestamp, endTimestamp);
+          if (matchingProtocols.length > 0 && chainData.totalDataChartBreakdown) {
+            const monadVolumeData: any[] = [];
+            
+            // Extract from chain's totalDataChartBreakdown by protocol name(s)
+            // Format: [timestamp, { "Protocol Name": volume }]
+            // Sum volumes from all matching protocol names (e.g., "Uniswap V2" + "Uniswap V4")
+            for (const record of chainData.totalDataChartBreakdown) {
+              if (Array.isArray(record) && record.length >= 2) {
+                const timestamp = record[0];
+                const breakdown = record[1];
+                
+                if (typeof breakdown === 'object' && breakdown !== null) {
+                  // Sum volumes from all matching protocol names
+                  let totalProtocolVolume = 0;
+                  for (const protocol of matchingProtocols) {
+                    const protocolName = protocol.name;
+                    const protocolVolume = breakdown[protocolName];
+                    if (protocolVolume !== undefined && protocolVolume !== null && typeof protocolVolume === 'number') {
+                      totalProtocolVolume += protocolVolume;
+                    }
+                  }
+                  
+                  if (totalProtocolVolume > 0) {
+                    monadVolumeData.push([timestamp, totalProtocolVolume]);
+                  }
+                }
+              }
+            }
+            
+            if (monadVolumeData.length > 0) {
+              const volumeInRange = calculateVolumeInRange(monadVolumeData, startTimestamp, endTimestamp);
               const sevenDaysAgo = endTimestamp - (7 * 24 * 60 * 60);
               const thirtyDaysAgo = endTimestamp - (30 * 24 * 60 * 60);
-              const volume7d = calculateVolumeInRange(protocolOnMonad.totalDataChart, sevenDaysAgo, endTimestamp);
-              const volume30d = calculateVolumeInRange(protocolOnMonad.totalDataChart, thirtyDaysAgo, endTimestamp);
+              const volume7d = calculateVolumeInRange(monadVolumeData, sevenDaysAgo, endTimestamp);
+              const volume30d = calculateVolumeInRange(monadVolumeData, thirtyDaysAgo, endTimestamp);
               
-              // Get 24h volume from protocol on Monad
-              const volume24h = protocolOnMonad.total24h !== undefined 
-                ? parseFloat(String(protocolOnMonad.total24h)) 
-                : null;
+              // Sum 24h volume from all matching protocols
+              let total24h = 0;
+              for (const protocol of matchingProtocols) {
+                if (protocol.total24h !== undefined) {
+                  total24h += parseFloat(String(protocol.total24h));
+                }
+              }
               
               return {
                 volumeInRange,
-                volume24h,
+                volume24h: total24h > 0 ? total24h : null,
                 volume7d,
                 volume30d,
                 isHistorical: true,
                 isMonadSpecific: true,
               };
             }
-            
-            // If protocol doesn't have totalDataChart, try to extract from chain's totalDataChartBreakdown
-            if (chainData.totalDataChartBreakdown && Array.isArray(chainData.totalDataChartBreakdown)) {
-              const protocolName = protocolOnMonad.name;
-              const monadVolumeData: any[] = [];
-              
-              for (const record of chainData.totalDataChartBreakdown) {
-                if (Array.isArray(record) && record.length >= 2) {
-                  const timestamp = record[0];
-                  const breakdown = record[1];
-                  
-                  if (typeof breakdown === 'object' && breakdown !== null) {
-                    // Breakdown format: { "Protocol Name": volume }
-                    const protocolVolume = breakdown[protocolName];
-                    if (protocolVolume !== undefined && protocolVolume !== null && typeof protocolVolume === 'number') {
-                      monadVolumeData.push([timestamp, protocolVolume]);
-                    }
-                  }
-                }
-              }
-              
-              if (monadVolumeData.length > 0) {
-                const volumeInRange = calculateVolumeInRange(monadVolumeData, startTimestamp, endTimestamp);
-                const sevenDaysAgo = endTimestamp - (7 * 24 * 60 * 60);
-                const thirtyDaysAgo = endTimestamp - (30 * 24 * 60 * 60);
-                const volume7d = calculateVolumeInRange(monadVolumeData, sevenDaysAgo, endTimestamp);
-                const volume30d = calculateVolumeInRange(monadVolumeData, thirtyDaysAgo, endTimestamp);
-                
-                const volume24h = protocolOnMonad.total24h !== undefined 
-                  ? parseFloat(String(protocolOnMonad.total24h)) 
-                  : null;
-                
-                return {
-                  volumeInRange,
-                  volume24h,
-                  volume7d,
-                  volume30d,
-                  isHistorical: true,
-                  isMonadSpecific: true,
-                };
-              }
-            }
           }
         }
       }
     } catch (chainError) {
-      // Fall through to all-chain volume
-      console.error(`Error fetching Monad-specific volume for ${protocolSlug}:`, chainError);
+      console.error(`Error fetching Monad chain overview for ${protocolSlug}:`, chainError);
     }
     
     // Fallback to all-chain volume if Monad-specific not available
