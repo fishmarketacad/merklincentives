@@ -245,18 +245,21 @@ function HomeContent() {
       
       for (const funding of platform.fundingProtocols) {
         for (const market of funding.markets) {
-          // Format TVL value
+          // Format MON value - use toFixed to avoid commas in CSV
+          const monFormatted = market.totalMON.toFixed(2);
+          
+          // Format TVL value - use toFixed to avoid commas in CSV
           const tvlFormatted = protocolTVLValue !== null && protocolTVLValue !== undefined
-            ? protocolTVLValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            ? protocolTVLValue.toFixed(2)
             : '';
           
-          // Format Volume value
+          // Format Volume value - use toFixed to avoid commas in CSV
           const volumeFormatted = volumeValue !== null && volumeValue !== undefined
-            ? volumeValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            ? volumeValue.toFixed(2)
             : '';
           
           csvLines.push(
-            `${platform.platformProtocol},${funding.fundingProtocol},"${market.marketName}",${market.totalMON.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })},${tvlFormatted},${volumeFormatted}`
+            `${platform.platformProtocol},${funding.fundingProtocol},"${market.marketName}",${monFormatted},"${tvlFormatted}","${volumeFormatted}"`
           );
         }
       }
