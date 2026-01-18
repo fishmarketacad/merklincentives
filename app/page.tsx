@@ -1561,7 +1561,7 @@ function HomeContent() {
             </div>
 
             {/* Original Hierarchical View (Collapsible) */}
-            <details className="mt-6">
+            <details className="mt-6" open>
               <summary className="cursor-pointer text-purple-400 hover:text-purple-300 font-semibold mb-4">
                 View Hierarchical Breakdown
               </summary>
