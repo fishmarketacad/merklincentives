@@ -29,11 +29,14 @@ async function getRedisClient() {
     const isTLS = redisUrl.startsWith('rediss://');
     const isRedisLabs = redisUrl.includes('redislabs.com');
     
-    // If it's Redis Labs but URL uses redis://, try rediss:// instead
+    // If it's Redis Labs but URL uses redis://, convert to rediss://
+    // IMPORTANT: When using rediss://, the protocol handles TLS automatically
+    // DO NOT set tls in socket config - it causes a conflict
     const urlToUse = isRedisLabs && !isTLS 
       ? redisUrl.replace('redis://', 'rediss://')
       : redisUrl;
     
+    // Socket config - never set TLS when using rediss:// (protocol handles it)
     const socketConfig: any = {
       connectTimeout: 10000, // 10 second timeout for Redis Labs
       reconnectStrategy: (retries: number) => {
@@ -45,12 +48,9 @@ async function getRedisClient() {
       },
     };
 
-    // Add TLS config if needed (Redis Labs requires TLS)
-    if (isTLS || isRedisLabs) {
-      socketConfig.tls = {
-        rejectUnauthorized: false, // Allow self-signed certificates if needed
-      };
-    }
+    // Do NOT set TLS config when URL uses rediss:// - the protocol handles it
+    // Only set TLS if URL uses redis:// AND we need TLS (but we convert to rediss:// above)
+    // So we should never set TLS manually
 
     redisClient = createClient({
       url: urlToUse,
