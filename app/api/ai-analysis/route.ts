@@ -355,12 +355,73 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
 
   // Add similar pools comparison with Merkl URLs
   prompt += `\n## Similar Pools Comparison\n`;
+  prompt += `These are pools from your selected protocols with the same token pairs. Use these for direct comparisons.\n`;
   for (const [tokenPair, pools] of Object.entries(similarPools)) {
     if (pools.length > 1) {
       prompt += `\n### ${tokenPair.toUpperCase()} Pools (${pools.length} pools)\n`;
       for (const pool of pools) {
         const merklLink = pool.merklUrl ? ` [Merkl: ${pool.merklUrl}]` : '';
-        prompt += `- ${pool.protocol} (${pool.fundingProtocol}): TVL Cost ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}, APR ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}${merklLink}\n`;
+        prompt += `- ${pool.protocol} (${pool.fundingProtocol}): TVL Cost ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}, APR ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}, Incentives ${pool.incentivesMON.toFixed(2)} MON${merklLink}\n`;
+      }
+    }
+  }
+
+  // Add examples from other Merkl opportunities with same token pairs
+  if (allOpportunities && allOpportunities.length > 0) {
+    prompt += `\n## Example Opportunities from Other Protocols (Same Token Pairs)\n`;
+    prompt += `These are examples of other pools/markets on Monad with the same token pairs as pools you're analyzing.\n`;
+    prompt += `Use these as benchmarks or to identify competitive alternatives.\n`;
+    
+    // Extract token pairs from current pools
+    const currentTokenPairs = new Set(currentWeek.pools.map(p => p.tokenPair.toLowerCase()));
+    
+    // Group opportunities by token pair
+    const opportunitiesByTokenPair: Record<string, any[]> = {};
+    
+    for (const opp of allOpportunities) {
+      const oppName = (opp.name || '').toLowerCase();
+      const oppId = (opp.opportunityId || '').toLowerCase();
+      
+      // Try to extract token pair from opportunity name or ID
+      let matchedTokenPair: string | null = null;
+      
+      for (const tokenPair of currentTokenPairs) {
+        const tokens = tokenPair.split('-');
+        // Check if both tokens appear in the opportunity name or ID
+        if (tokens.every(token => oppName.includes(token.toLowerCase()) || oppId.includes(token.toLowerCase()))) {
+          matchedTokenPair = tokenPair;
+          break;
+        }
+      }
+      
+      if (matchedTokenPair) {
+        if (!opportunitiesByTokenPair[matchedTokenPair]) {
+          opportunitiesByTokenPair[matchedTokenPair] = [];
+        }
+        opportunitiesByTokenPair[matchedTokenPair].push(opp);
+      }
+    }
+    
+    // Show examples for each token pair (limit to top 5 per pair to avoid overwhelming)
+    for (const tokenPair of Array.from(currentTokenPairs).sort()) {
+      const examples = opportunitiesByTokenPair[tokenPair] || [];
+      if (examples.length > 0) {
+        prompt += `\n### ${tokenPair.toUpperCase()} Examples:\n`;
+        prompt += `Found ${examples.length} other ${tokenPair} opportunities on Monad. Examples:\n`;
+        
+        for (const opp of examples.slice(0, 5)) {
+          const protocolId = opp.mainProtocolId || opp.protocol?.id || 'unknown';
+          const oppName = opp.name || opp.opportunityId || 'Unknown';
+          const merklUrl = `https://app.merkl.xyz/chains/monad?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
+          
+          prompt += `- ${protocolId}: "${oppName}" [Merkl: ${merklUrl}]\n`;
+        }
+        
+        if (examples.length > 5) {
+          prompt += `  ... and ${examples.length - 5} more ${tokenPair} opportunities\n`;
+        }
+        
+        prompt += `\nWhen analyzing ${tokenPair} pools, compare against these examples to see if your pools are competitive.\n`;
       }
     }
   }
@@ -525,6 +586,8 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
    - TVL Cost >50% (high priority) - within same asset type
    - TVL Cost >20% (medium priority) - within same asset type
    - Significant TVL Cost differences (>20%) between pools with same token pairs and asset type
+   - When comparing pools, reference examples from "Example Opportunities from Other Protocols" section to see if similar pools exist elsewhere
+   - Example: "Pool X has 16.73% TVL Cost, which is 300% higher than Borrow USDT0 (4.19%) - see example opportunities for similar stablecoin borrows"
 
 3. **WoW Change Explanations**: For each pool with WoW change >20% or <-20%:
    - FIRST check if incentives changed (compare current vs previous week incentives)
@@ -534,8 +597,10 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
      * Compare their TVL Costs - if another pool has lower TVL Cost or higher incentives, it likely attracted TVL away
      * Include competitorLinks array with Merkl URLs for each competing pool
      * Name the specific protocol, funding protocol, and market name
+   - Reference "Example Opportunities from Other Protocols" to see if new competitors appeared or if similar pools exist elsewhere
    - Also check "All Active Campaigns" for additional context
    - Do NOT just say "competitors" - be specific and include Merkl links in competitorLinks array
+   - Example format: "TVL Cost increased because competitor pool Uniswap MON-USDC (Upshift) has lower TVL Cost (45% vs 55%) and higher incentives. See example opportunities section for other MON-USDC pools on Monad."
 
 4. **Recommendations**: Provide actionable recommendations to improve efficiency.
    - Focus on comparisons within the same asset type
