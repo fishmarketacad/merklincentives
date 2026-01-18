@@ -1,9 +1,40 @@
-import { kv } from '@vercel/kv';
+import { createClient } from 'redis';
 
 /**
- * Cache utility for Vercel KV
+ * Cache utility for Redis
  * Provides caching for Merkl campaigns, opportunities, TVL, and volume data
  */
+
+// Create Redis client singleton
+let redisClient: ReturnType<typeof createClient> | null = null;
+
+/**
+ * Get or create Redis client
+ */
+async function getRedisClient() {
+  if (redisClient && redisClient.isOpen) {
+    return redisClient;
+  }
+
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) {
+    throw new Error('REDIS_URL environment variable is not set');
+  }
+
+  redisClient = createClient({
+    url: redisUrl,
+  });
+
+  redisClient.on('error', (err) => {
+    console.error('Redis Client Error:', err);
+  });
+
+  if (!redisClient.isOpen) {
+    await redisClient.connect();
+  }
+
+  return redisClient;
+}
 
 // Cache TTLs (in seconds)
 const CACHE_TTL = {
@@ -20,8 +51,17 @@ const CACHE_TTL = {
  */
 export async function getCache<T>(key: string): Promise<T | null> {
   try {
-    const value = await kv.get<T>(key);
-    return value;
+    const client = await getRedisClient();
+    const value = await client.get(key);
+    if (value === null) {
+      return null;
+    }
+    // Parse JSON if it's a string, otherwise return as-is
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return value as T;
+    }
   } catch (error) {
     console.error(`Cache get error for key ${key}:`, error);
     return null;
@@ -33,7 +73,10 @@ export async function getCache<T>(key: string): Promise<T | null> {
  */
 export async function setCache<T>(key: string, value: T, ttl: number): Promise<void> {
   try {
-    await kv.set(key, value, { ex: ttl });
+    const client = await getRedisClient();
+    // Serialize value to JSON string
+    const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+    await client.setEx(key, ttl, serialized);
   } catch (error) {
     console.error(`Cache set error for key ${key}:`, error);
     // Don't throw - caching failures shouldn't break the app
