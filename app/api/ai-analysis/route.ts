@@ -251,14 +251,17 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
      c) If incentives stayed similar but TVL dropped, identify which competitor campaigns gained TVL (see point 4)
      d) If incentives increased but TVL Cost increased, explain why (TVL didn't grow proportionally, competitor campaigns, etc.)
 
-4. **Identify Specific Competitor Campaigns**:
-   - When explaining WoW increases or TVL shifts, DO NOT just say "competitors" or "vampire campaigns"
-   - Instead, identify SPECIFIC campaigns from the "All Active Campaigns" section that:
-     a) Target the same assets/token pairs
-     b) Have higher incentives or better TVL Cost
-     c) Started during or before the current period
-   - Name the specific protocol, funding protocol, and market name of competing campaigns
-   - Example: "TVL shifted to Uniswap MON-USDC pool (funded by ProtocolX) which has 15% lower TVL Cost"
+4. **Identify Specific Competitor Pools with Same Token Pair**:
+   - **CRITICAL**: When explaining WoW increases, FIRST look at the "Similar Pools Comparison" section
+   - Find pools with the EXACT SAME token pair (e.g., if analyzing "uniswap-upshift-MON-USDC", find other MON-USDC pools)
+   - Compare their TVL Costs - if another pool with the same token pair has:
+     * Lower TVL Cost (more efficient)
+     * Higher incentives
+     * Higher APR
+   - Then that pool likely attracted TVL away from the pool you're analyzing
+   - Include these competing pools in the competitorLinks array with their Merkl URLs
+   - Example: If analyzing "uniswap-upshift-MON-USDC" with +24.69% WoW increase, find other MON-USDC pools like "uniswap-MON-USDC" or "pancakeswap-MON-USDC" and compare their metrics
+   - Also check "All Active Campaigns" for additional context, but prioritize pools from "Similar Pools Comparison" as they have the exact same token pair
 
 5. **Volume Data Quality**:
    - If volume appears uniform across pools (same value), note that this may indicate data aggregation issues
