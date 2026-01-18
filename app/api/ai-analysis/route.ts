@@ -229,14 +229,39 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
 - **WoW Change**: Week-over-week percentage change in TVL Cost. Negative is better (cost decreased).
 - **APR**: Annual Percentage Rate from Merkl incentives.
 
-## Analysis Guidelines
-1. **Compare Similar Pools**: Pools with the same token pairs (e.g., MON-USDC, MON-AUSD) should have similar TVL Costs. Flag when APR differs by more than 20%.
-2. **Baseline Comparison**: Use Uniswap pools as the baseline. Other pools should strive to match or have lower TVL Cost while maintaining utilization.
-3. **WoW Change Analysis**: For each significant WoW change (>10% increase or decrease), explain:
-   - Was it due to competitor pools with higher incentives?
-   - Did TVL shift to competitors?
-   - Were new pools created with higher incentives?
-   - Any other factors?
+## Analysis Guidelines - CRITICAL RULES
+
+1. **Asset Class Comparison Only**: 
+   - ONLY compare pools with similar asset types (e.g., MON pools vs MON pools, BTC pools vs BTC pools, stablecoin pools vs stablecoin pools)
+   - NEVER compare different asset classes (e.g., MON pools vs BTC pools, LST pools vs stablecoin pools)
+   - Different asset classes have different risk profiles and expected yields - comparing them is meaningless
+   - Group pools by asset type: MON-related, BTC-related, stablecoin-related, LST-related, etc.
+
+2. **Compare Similar Pools Within Asset Class**: 
+   - Within the same asset class, pools with the same token pairs (e.g., MON-USDC, MON-AUSD) should have similar TVL Costs
+   - Flag when TVL Cost differs by more than 20% within the same asset class and token pair
+   - Use Uniswap pools as baseline within each asset class
+
+3. **WoW Change Analysis - Must Include Previous Week Incentives**:
+   - For each significant WoW change (>20% increase or <-20% decrease), you MUST check:
+     a) Did incentives change? Compare current week incentives vs previous week incentives
+     b) If incentives dropped significantly, the WoW cost drop might just be due to lower incentives, not efficiency improvement
+     c) If incentives stayed similar but TVL dropped, identify which competitor campaigns gained TVL (see point 4)
+     d) If incentives increased but TVL Cost increased, explain why (TVL didn't grow proportionally, competitor campaigns, etc.)
+
+4. **Identify Specific Competitor Campaigns**:
+   - When explaining WoW increases or TVL shifts, DO NOT just say "competitors" or "vampire campaigns"
+   - Instead, identify SPECIFIC campaigns from the "All Active Campaigns" section that:
+     a) Target the same assets/token pairs
+     b) Have higher incentives or better TVL Cost
+     c) Started during or before the current period
+   - Name the specific protocol, funding protocol, and market name of competing campaigns
+   - Example: "TVL shifted to Uniswap MON-USDC pool (funded by ProtocolX) which has 15% lower TVL Cost"
+
+5. **Volume Data Quality**:
+   - If volume appears uniform across pools (same value), note that this may indicate data aggregation issues
+   - Do not make conclusions based on unreliable volume data
+   - Focus on TVL Cost analysis instead when volume data is suspect
 
 ## Current Week Pool Data
 `;
@@ -250,19 +275,69 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
     poolsByProtocol[pool.protocol].push(pool);
   }
 
+  // Group pools by asset type for better comparison
+  const poolsByAssetType: Record<string, PoolData[]> = {};
+  for (const pool of currentWeek.pools) {
+    // Classify asset type from token pair or market name
+    let assetType = 'other';
+    const tokenPair = pool.tokenPair.toLowerCase();
+    const marketName = pool.marketName.toLowerCase();
+    
+    if (tokenPair.includes('mon') || marketName.includes('mon')) {
+      assetType = 'mon-related';
+    } else if (tokenPair.includes('btc') || tokenPair.includes('wbtc') || tokenPair.includes('lbtc') || marketName.includes('btc')) {
+      assetType = 'btc-related';
+    } else if (tokenPair.includes('ausd') || tokenPair.includes('usdc') || tokenPair.includes('usdt') || tokenPair.includes('3pool')) {
+      assetType = 'stablecoin-related';
+    } else if (tokenPair.includes('lst') || marketName.includes('lst') || tokenPair.includes('stmon') || tokenPair.includes('shmon')) {
+      assetType = 'lst-related';
+    }
+    
+    if (!poolsByAssetType[assetType]) {
+      poolsByAssetType[assetType] = [];
+    }
+    poolsByAssetType[assetType].push(pool);
+  }
+
   for (const [protocol, pools] of Object.entries(poolsByProtocol)) {
     prompt += `\n### ${protocol.toUpperCase()} Protocol\n`;
     for (const pool of pools) {
+      // Find previous week data for this pool
+      const prevPool = previousWeek?.pools.find(p => 
+        p.protocol === pool.protocol && 
+        p.fundingProtocol === pool.fundingProtocol && 
+        p.marketName === pool.marketName
+      );
+      
       prompt += `- **${pool.marketName}**\n`;
       prompt += `  - Funding Protocol: ${pool.fundingProtocol}\n`;
       prompt += `  - Token Pair: ${pool.tokenPair}\n`;
-      prompt += `  - Incentives: ${pool.incentivesMON.toFixed(2)} MON${pool.incentivesUSD ? ` ($${pool.incentivesUSD.toFixed(2)})` : ''}\n`;
+      prompt += `  - Current Week Incentives: ${pool.incentivesMON.toFixed(2)} MON${pool.incentivesUSD ? ` ($${pool.incentivesUSD.toFixed(2)})` : ''}\n`;
+      if (prevPool) {
+        prompt += `  - Previous Week Incentives: ${prevPool.incentivesMON.toFixed(2)} MON${prevPool.incentivesUSD ? ` ($${prevPool.incentivesUSD.toFixed(2)})` : ''}\n`;
+        const incentiveChange = prevPool.incentivesUSD && pool.incentivesUSD 
+          ? ((pool.incentivesUSD - prevPool.incentivesUSD) / prevPool.incentivesUSD * 100).toFixed(1)
+          : 'N/A';
+        prompt += `  - Incentive Change WoW: ${incentiveChange !== 'N/A' ? (parseFloat(incentiveChange) > 0 ? '+' : '') + incentiveChange + '%' : 'N/A'}\n`;
+      }
       prompt += `  - TVL: ${pool.tvl ? `$${(pool.tvl / 1000000).toFixed(2)}M` : 'N/A'}\n`;
       prompt += `  - Volume: ${pool.volume ? `$${(pool.volume / 1000000).toFixed(2)}M` : 'N/A'}\n`;
       prompt += `  - APR: ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}\n`;
       prompt += `  - TVL Cost: ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}\n`;
       if (pool.wowChange !== null) {
-        prompt += `  - WoW Change: ${pool.wowChange > 0 ? '+' : ''}${pool.wowChange.toFixed(2)}%\n`;
+        prompt += `  - TVL Cost WoW Change: ${pool.wowChange > 0 ? '+' : ''}${pool.wowChange.toFixed(2)}%\n`;
+      }
+    }
+  }
+  
+  // Add asset type grouping for better context
+  prompt += `\n## Pools Grouped by Asset Type (for proper comparison)\n`;
+  for (const [assetType, pools] of Object.entries(poolsByAssetType)) {
+    if (pools.length > 0) {
+      prompt += `\n### ${assetType.toUpperCase()} Pools (${pools.length} pools)\n`;
+      prompt += `Only compare TVL Costs within this asset type. Do NOT compare ${assetType} pools to other asset types.\n`;
+      for (const pool of pools) {
+        prompt += `- ${pool.protocol} ${pool.marketName}: TVL Cost ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}, Incentives ${pool.incentivesMON.toFixed(2)} MON\n`;
       }
     }
   }
@@ -280,31 +355,108 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
 
   if (previousWeek) {
     prompt += `\n## Previous Week Comparison\n`;
-    prompt += `Previous week had ${previousWeek.pools.length} pools. Compare TVL Costs and identify significant changes.\n`;
+    prompt += `Previous week had ${previousWeek.pools.length} pools.\n`;
+    prompt += `**IMPORTANT**: When analyzing WoW changes, always check if incentives changed first.\n`;
+    prompt += `- If incentives dropped significantly, the WoW cost drop is likely due to lower incentives, not efficiency improvement\n`;
+    prompt += `- If incentives stayed similar but TVL Cost changed, then look for competitor campaigns or TVL shifts\n`;
+    prompt += `- Previous week incentives are shown above for each pool - use them in your analysis\n`;
   }
 
   // Add all campaigns context (vampire campaigns, competitive shifts)
   if (allCampaigns && allCampaigns.length > 0) {
     prompt += `\n## All Active Campaigns on Monad (Competitive Context)\n`;
     prompt += `There are ${allCampaigns.length} total campaigns on Monad. This includes campaigns from protocols not in your selected list.\n`;
-    prompt += `Use this to identify:\n`;
-    prompt += `- Vampire campaigns (campaigns targeting the same assets/markets)\n`;
-    prompt += `- Competitive shifts (new campaigns that might affect TVL)\n`;
-    prompt += `- Campaigns that ended (explaining why TVL might have shifted)\n`;
+    prompt += `**CRITICAL**: When explaining WoW changes or TVL shifts, you MUST identify SPECIFIC competing campaigns from this list.\n`;
+    prompt += `Do NOT just say "competitors" or "vampire campaigns" - name the specific protocol, funding protocol, and market.\n`;
+    prompt += `\nUse this to:\n`;
+    prompt += `- Identify SPECIFIC campaigns targeting the same assets/token pairs as pools with WoW increases\n`;
+    prompt += `- Find campaigns with higher incentives or better TVL Cost that might have attracted TVL\n`;
+    prompt += `- Identify new campaigns that started during the period\n`;
+    prompt += `- Find campaigns that ended (explaining why TVL might have shifted)\n`;
     
-    // Group campaigns by protocol
-    const campaignsByProtocol: Record<string, any[]> = {};
+    // Group campaigns by token pair for easier competitor identification
+    // Match campaigns to pools by token pairs
+    const campaignsByTokenPair: Record<string, any[]> = {};
+    const allTokenPairs = new Set(currentWeek.pools.map(p => p.tokenPair.toLowerCase()));
+    
     for (const campaign of allCampaigns) {
       const protocolId = campaign.mainProtocolId || campaign.protocol?.id || 'unknown';
-      if (!campaignsByProtocol[protocolId]) {
-        campaignsByProtocol[protocolId] = [];
+      const fundingProtocol = campaign.protocol?.id || campaign.creator?.tags?.[0] || 'unknown';
+      const opportunityId = campaign.opportunityId || '';
+      
+      // Try to match campaign to token pairs from current pools
+      // Extract potential token pair from opportunity ID or campaign data
+      let matchedTokenPair = null;
+      for (const tokenPair of allTokenPairs) {
+        // Check if opportunity ID or campaign data contains tokens from the pair
+        const tokens = tokenPair.split('-');
+        const opportunityLower = opportunityId.toLowerCase();
+        if (tokens.every(token => opportunityLower.includes(token.toLowerCase()))) {
+          matchedTokenPair = tokenPair;
+          break;
+        }
       }
-      campaignsByProtocol[protocolId].push(campaign);
+      
+      // If no exact match, classify by asset type
+      if (!matchedTokenPair) {
+        let assetKey = 'other';
+        const opportunityLower = opportunityId.toLowerCase();
+        if (opportunityLower.includes('mon')) {
+          assetKey = 'mon-related';
+        } else if (opportunityLower.includes('btc') || opportunityLower.includes('wbtc')) {
+          assetKey = 'btc-related';
+        } else if (opportunityLower.includes('ausd') || opportunityLower.includes('usdc') || opportunityLower.includes('usdt')) {
+          assetKey = 'stablecoin-related';
+        }
+        matchedTokenPair = assetKey;
+      }
+      
+      if (!campaignsByTokenPair[matchedTokenPair]) {
+        campaignsByTokenPair[matchedTokenPair] = [];
+      }
+      
+      const startDate = campaign.startTimestamp ? new Date(parseInt(String(campaign.startTimestamp)) * 1000).toISOString().split('T')[0] : 'unknown';
+      const endDate = campaign.endTimestamp ? new Date(parseInt(String(campaign.endTimestamp)) * 1000).toISOString().split('T')[0] : 'unknown';
+      
+      campaignsByTokenPair[matchedTokenPair].push({
+        ...campaign,
+        protocolId,
+        fundingProtocol,
+        opportunityId,
+        startDate,
+        endDate,
+      });
     }
     
-    prompt += `\n### Campaigns by Protocol:\n`;
-    for (const [protocolId, campaigns] of Object.entries(campaignsByProtocol)) {
-      prompt += `- ${protocolId}: ${campaigns.length} campaigns\n`;
+    prompt += `\n### Competing Campaigns by Token Pair/Asset Type:\n`;
+    prompt += `**Use this to identify SPECIFIC competitor campaigns when explaining WoW changes.**\n`;
+    prompt += `When a pool shows WoW increase, find campaigns here targeting the same token pair.\n\n`;
+    
+    // Show campaigns grouped by token pairs that exist in current pools
+    for (const tokenPair of Array.from(allTokenPairs).sort()) {
+      const campaigns = campaignsByTokenPair[tokenPair] || [];
+      if (campaigns.length > 0) {
+        prompt += `\n**${tokenPair.toUpperCase()}** (${campaigns.length} competing campaigns):\n`;
+        for (const campaign of campaigns.slice(0, 15)) {
+          prompt += `- ${campaign.protocolId} (funded by ${campaign.fundingProtocol}) - Opportunity: ${campaign.opportunityId || 'N/A'} - Active: ${campaign.startDate} to ${campaign.endDate}\n`;
+        }
+        if (campaigns.length > 15) {
+          prompt += `  ... and ${campaigns.length - 15} more ${tokenPair} campaigns\n`;
+        }
+      }
+    }
+    
+    // Also show campaigns by asset type for unmatched ones
+    for (const [assetType, campaigns] of Object.entries(campaignsByTokenPair)) {
+      if (!allTokenPairs.has(assetType) && campaigns.length > 0) {
+        prompt += `\n**${assetType.toUpperCase()}** (${campaigns.length} campaigns - no matching pools in current selection):\n`;
+        for (const campaign of campaigns.slice(0, 10)) {
+          prompt += `- ${campaign.protocolId} (funded by ${campaign.fundingProtocol}) - Opportunity: ${campaign.opportunityId || 'N/A'}\n`;
+        }
+        if (campaigns.length > 10) {
+          prompt += `  ... and ${campaigns.length - 10} more\n`;
+        }
+      }
     }
   }
 
@@ -349,12 +501,26 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
 
   prompt += `\n## Your Analysis Tasks
 1. **Key Findings**: List 3-5 most important findings about incentive efficiency.
+   - ONLY compare pools within the same asset type (MON vs MON, BTC vs BTC, etc.)
+   - Do NOT compare different asset types
+
 2. **Efficiency Issues**: Identify pools with:
-   - TVL Cost >50% (high priority)
-   - TVL Cost >20% (medium priority)
-   - Significant APR differences between similar pools (>20% difference)
-3. **WoW Change Explanations**: For each pool with WoW change >10% or <-10%, explain the likely cause.
+   - TVL Cost >50% (high priority) - within same asset type
+   - TVL Cost >20% (medium priority) - within same asset type
+   - Significant TVL Cost differences (>20%) between pools with same token pairs and asset type
+
+3. **WoW Change Explanations**: For each pool with WoW change >20% or <-20%:
+   - FIRST check if incentives changed (compare current vs previous week incentives)
+   - If incentives dropped significantly, note that cost drop is due to lower incentives, not efficiency
+   - If incentives stayed similar, identify SPECIFIC competitor campaigns from "All Active Campaigns" that:
+     * Target the same assets/token pairs
+     * Have better TVL Cost or higher incentives
+     * Name the specific protocol, funding protocol, and market
+   - Do NOT just say "competitors" - be specific
+
 4. **Recommendations**: Provide actionable recommendations to improve efficiency.
+   - Focus on comparisons within the same asset type
+   - Reference specific competitor campaigns when relevant
 
 Format your response as JSON with this structure:
 {
