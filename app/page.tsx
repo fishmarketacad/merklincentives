@@ -937,37 +937,41 @@ function HomeContent() {
 
             {/* AI Analysis Results */}
             {aiAnalysis && (
-              <div className="mb-6 bg-purple-900/20 border-2 border-purple-500/50 rounded-lg p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                    <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                    </svg>
-                    AI Analysis Insights
-                  </h3>
-                  <button
-                    onClick={(e) => {
-                      const analysisText = JSON.stringify(aiAnalysis, null, 2);
-                      navigator.clipboard.writeText(analysisText);
-                      // Show temporary feedback
-                      const btn = e.currentTarget;
-                      const originalHTML = btn.innerHTML;
-                      btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Copied!';
-                      btn.classList.add('bg-green-500');
-                      setTimeout(() => {
-                        btn.innerHTML = originalHTML;
-                        btn.classList.remove('bg-green-500');
-                      }, 2000);
-                    }}
-                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2"
-                    title="Copy analysis to clipboard"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    Copy
-                  </button>
-                </div>
+              <details className="mb-6 bg-purple-900/20 border-2 border-purple-500/50 rounded-lg p-6" open>
+                <summary className="cursor-pointer list-none">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                      <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                      AI Analysis Insights
+                    </h3>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const analysisText = JSON.stringify(aiAnalysis, null, 2);
+                        navigator.clipboard.writeText(analysisText);
+                        // Show temporary feedback
+                        const btn = e.currentTarget;
+                        const originalHTML = btn.innerHTML;
+                        btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Copied!';
+                        btn.classList.add('bg-green-500');
+                        setTimeout(() => {
+                          btn.innerHTML = originalHTML;
+                          btn.classList.remove('bg-green-500');
+                        }, 2000);
+                      }}
+                      className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2"
+                      title="Copy analysis to clipboard"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      Copy
+                    </button>
+                  </div>
+                </summary>
 
                 {/* Key Findings */}
                 {aiAnalysis.keyFindings && aiAnalysis.keyFindings.length > 0 && (
@@ -1040,8 +1044,8 @@ function HomeContent() {
                                   {competitor.merklUrl && (
                                     <a 
                                       href={competitor.merklUrl} 
-                                      target="_blank"
-                                      rel="noopener noreferrer"
+            target="_blank"
+            rel="noopener noreferrer"
                                       className="ml-2 text-purple-400 hover:text-purple-300 underline"
                                     >
                                       [View on Merkl]
@@ -1137,8 +1141,8 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
-                          Total MON tokens distributed as incentives during the selected date range. Calculated from Merkl campaign daily rewards converted to MON using token price.
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                          Total MON tokens distributed as incentives during the selected date range. Calculated from Merkl campaign daily rewards converted to MON using token price. Percentage shown compares to the value from 7 days ago.
                         </div>
                       </div>
                     </th>
@@ -1153,8 +1157,8 @@ function HomeContent() {
                               </span>
                             )}
                           </button>
-                          <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
-                            USD value of MON incentives. Calculated as: Incentive (MON) × MON Price
+                          <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                            USD value of MON incentives. Calculated as: Incentive (MON) × MON Price. Percentage shown compares to the value from 7 days ago.
                           </div>
                         </div>
                       </th>
@@ -1169,7 +1173,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
                           Number of days in the selected date range (inclusive of start and end dates)
                         </div>
                       </div>
@@ -1184,8 +1188,8 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
-                          Total Value Locked in the pool as of the end date. Historical TVL from Merkl campaign metrics, or current TVL if historical data unavailable.
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                          Total Value Locked in the pool as of the end date. Historical TVL from Merkl campaign metrics, or current TVL if historical data unavailable. Percentage shown compares to the value from 7 days ago.
                         </div>
                       </div>
                     </th>
@@ -1199,7 +1203,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
                           Annualized cost to attract TVL. Formula: (Incentives annualized / TVL) × 100. Lower is better. Red: &gt;50%, Yellow: &gt;20%, Green: ≤20%
                         </div>
                       </div>
@@ -1214,7 +1218,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
                           Week-over-week percentage change in TVL Cost. Negative (green) is better (cost decreased). Red: &gt;10% increase, Green: &lt;-10% decrease
                         </div>
                       </div>
@@ -1244,7 +1248,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
                           Annualized cost per volume. Formula: (Incentives annualized / Volume) × 100. Lower is better. Shows "-" for lending protocols or when volume unavailable.
                         </div>
                       </div>
@@ -1259,7 +1263,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
                           Week-over-week percentage change in Volume Cost. Negative (green) is better (cost decreased). Red: &gt;10% increase, Green: &lt;-10% decrease. Shows "-" when volume unavailable.
                         </div>
                       </div>
@@ -1466,7 +1470,7 @@ function HomeContent() {
                                 const value = row.market.totalMON.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                                 const change = row.incentiveMONChange;
                                 if (change !== null) {
-                                  const changeColor = change > 10 ? 'text-red-400' : change < -10 ? 'text-green-400' : 'text-gray-400';
+                                  const changeColor = change > 10 ? 'text-green-400' : change < -10 ? 'text-red-400' : 'text-gray-400';
                                   return (
                                     <span>
                                       {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
@@ -1483,7 +1487,7 @@ function HomeContent() {
                                   const value = `$${row.incentiveUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
                                   const change = row.incentiveUSDChange;
                                   if (change !== null) {
-                                    const changeColor = change > 10 ? 'text-red-400' : change < -10 ? 'text-green-400' : 'text-gray-400';
+                                    const changeColor = change > 10 ? 'text-green-400' : change < -10 ? 'text-red-400' : 'text-gray-400';
                                     return (
                                       <span>
                                         {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
@@ -1501,7 +1505,7 @@ function HomeContent() {
                                 const value = `$${(row.market.tvl / 1000000).toFixed(2)}M`;
                                 const change = row.tvlChange;
                                 if (change !== null) {
-                                  const changeColor = change > 10 ? 'text-red-400' : change < -10 ? 'text-green-400' : 'text-gray-400';
+                                  const changeColor = change > 10 ? 'text-green-400' : change < -10 ? 'text-red-400' : 'text-gray-400';
                                   return (
                                     <span>
                                       {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
@@ -1566,7 +1570,7 @@ function HomeContent() {
                                 const value = `$${(row.volumeValue / 1000000).toFixed(2)}M`;
                                 const change = row.volumeChange;
                                 if (change !== null) {
-                                  const changeColor = change > 10 ? 'text-red-400' : change < -10 ? 'text-green-400' : 'text-gray-400';
+                                  const changeColor = change > 10 ? 'text-green-400' : change < -10 ? 'text-red-400' : 'text-gray-400';
                                   return (
                                     <span>
                                       {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
