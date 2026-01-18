@@ -43,8 +43,9 @@ async function fetchFromMerkl(url: string): Promise<any> {
 
 /**
  * Fetch campaigns for a protocol (with caching)
+ * @param endDate - Optional end date to determine if this is historical data
  */
-async function fetchCampaigns(protocolId: string): Promise<Campaign[]> {
+async function fetchCampaigns(protocolId: string, endDate?: string): Promise<Campaign[]> {
   const campaigns: Campaign[] = [];
   let page = 0;
   let hasMore = true;
@@ -88,8 +89,10 @@ async function fetchCampaigns(protocolId: string): Promise<Campaign[]> {
         hasMore = false;
       } else {
         campaigns.push(...pageCampaigns);
-        // Cache the fetched campaigns
-        await cacheMerklCampaigns(protocolId, page, pageCampaigns);
+        // Determine if this is historical data (endDate is in the past)
+        // Historical campaigns never change, so cache longer
+        const isHistorical = endDate ? (new Date(endDate).getTime() < Date.now() - 86400000) : false; // More than 1 day ago
+        await cacheMerklCampaigns(protocolId, page, pageCampaigns, isHistorical);
         
         if (pageCampaigns.length < 100) {
           hasMore = false;
@@ -276,13 +279,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch campaigns for all protocols
+    // Pass endDate to determine if this is historical data (for longer cache TTL)
     let allCampaigns: Campaign[] = [];
 
     if (protocols.length === 1 && protocols[0] === 'all') {
-      allCampaigns = await fetchCampaigns('all');
+      allCampaigns = await fetchCampaigns('all', endDate);
     } else {
       for (const protocol of protocols) {
-        const protocolCampaigns = await fetchCampaigns(protocol);
+        const protocolCampaigns = await fetchCampaigns(protocol, endDate);
         allCampaigns.push(...protocolCampaigns);
         await new Promise(resolve => setTimeout(resolve, 100));
       }

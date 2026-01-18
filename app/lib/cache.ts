@@ -7,10 +7,12 @@ import { kv } from '@vercel/kv';
 
 // Cache TTLs (in seconds)
 const CACHE_TTL = {
-  MERKL_CAMPAIGNS: 21600,     // 6 hours - campaigns change infrequently
-  MERKL_OPPORTUNITIES: 21600, // 6 hours - opportunities change infrequently
-  DEFILLAMA_TVL: 21600,       // 6 hours - TVL changes slowly
-  DUNE_VOLUME: 86400,         // 24 hours - volumes are historical
+  MERKL_CAMPAIGNS: 21600,           // 6 hours - campaigns change infrequently
+  MERKL_OPPORTUNITIES: 21600,       // 6 hours - opportunities change infrequently
+  DEFILLAMA_TVL_CURRENT: 21600,    // 6 hours - current TVL changes slowly
+  DEFILLAMA_TVL_HISTORICAL: 2592000, // 30 days - historical TVL never changes
+  DUNE_VOLUME: 2592000,             // 30 days - volumes are historical and never change
+  MERKL_CAMPAIGNS_HISTORICAL: 2592000, // 30 days - historical campaigns never change
 };
 
 /**
@@ -57,14 +59,17 @@ export const CacheKeys = {
 
 /**
  * Cache Merkl campaigns
+ * @param isHistorical - If true, uses longer TTL (30 days) for historical date ranges
  */
 export async function cacheMerklCampaigns(
   protocolId: string,
   page: number,
-  campaigns: any[]
+  campaigns: any[],
+  isHistorical: boolean = false
 ): Promise<void> {
   const key = CacheKeys.merklCampaigns(protocolId, page);
-  await setCache(key, campaigns, CACHE_TTL.MERKL_CAMPAIGNS);
+  const ttl = isHistorical ? CACHE_TTL.MERKL_CAMPAIGNS_HISTORICAL : CACHE_TTL.MERKL_CAMPAIGNS;
+  await setCache(key, campaigns, ttl);
 }
 
 /**
@@ -101,14 +106,17 @@ export async function getCachedMerklOpportunities(
 
 /**
  * Cache DeFiLlama TVL
+ * @param isHistorical - If true, uses longer TTL (30 days) since historical data never changes
  */
 export async function cacheDefillamaTVL(
   protocolSlug: string,
   date: string,
-  tvl: number
+  tvl: number,
+  isHistorical: boolean = false
 ): Promise<void> {
   const key = CacheKeys.defillamaTVL(protocolSlug, date);
-  await setCache(key, tvl, CACHE_TTL.DEFILLAMA_TVL);
+  const ttl = isHistorical ? CACHE_TTL.DEFILLAMA_TVL_HISTORICAL : CACHE_TTL.DEFILLAMA_TVL_CURRENT;
+  await setCache(key, tvl, ttl);
 }
 
 /**

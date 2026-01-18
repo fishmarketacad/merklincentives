@@ -705,8 +705,9 @@ async function fetchProtocolTVL(protocolSlug: string, endTimestamp: number): Pro
     }
     
     // Cache the result if we got a value
+    // Use longer TTL for historical data (data from the past never changes)
     if (resultTVL !== null) {
-      await cacheDefillamaTVL(protocolSlug, endDate, resultTVL);
+      await cacheDefillamaTVL(protocolSlug, endDate, resultTVL, isHistorical);
     }
     
     return { tvl: resultTVL, isHistorical };
