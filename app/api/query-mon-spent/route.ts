@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getCachedMerklCampaigns, cacheMerklCampaigns } from '@/app/lib/cache';
 
 const MERKL_API_BASE = 'https://api.merkl.xyz';
 const MONAD_CHAIN_ID = 143;
@@ -41,7 +42,7 @@ async function fetchFromMerkl(url: string): Promise<any> {
 }
 
 /**
- * Fetch campaigns for a protocol
+ * Fetch campaigns for a protocol (with caching)
  */
 async function fetchCampaigns(protocolId: string): Promise<Campaign[]> {
   const campaigns: Campaign[] = [];
@@ -50,6 +51,20 @@ async function fetchCampaigns(protocolId: string): Promise<Campaign[]> {
 
   while (hasMore) {
     try {
+      // Check cache first
+      const cached = await getCachedMerklCampaigns(protocolId, page);
+      if (cached && cached.length > 0) {
+        console.log(`Cache hit for campaigns: ${protocolId} page ${page}`);
+        campaigns.push(...cached);
+        if (cached.length < 100) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+        continue;
+      }
+
+      // Cache miss - fetch from API
       let url;
       if (protocolId === 'all') {
         url = `${MERKL_API_BASE}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100`;
@@ -73,6 +88,9 @@ async function fetchCampaigns(protocolId: string): Promise<Campaign[]> {
         hasMore = false;
       } else {
         campaigns.push(...pageCampaigns);
+        // Cache the fetched campaigns
+        await cacheMerklCampaigns(protocolId, page, pageCampaigns);
+        
         if (pageCampaigns.length < 100) {
           hasMore = false;
         } else {
@@ -80,7 +98,7 @@ async function fetchCampaigns(protocolId: string): Promise<Campaign[]> {
         }
       }
 
-      // Rate limiting
+      // Rate limiting (only for API calls, not cached)
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
       console.error(`Error fetching campaigns page ${page}:`, error);

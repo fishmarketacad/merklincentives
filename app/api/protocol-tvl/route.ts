@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { 
+  getCachedDefillamaTVL, 
+  cacheDefillamaTVL,
+  getCachedDuneVolume,
+  cacheDuneVolume 
+} from '@/app/lib/cache';
 
 const DEFILLAMA_API_BASE = 'https://api.llama.fi';
 const DUNE_API_BASE = 'https://api.dune.com/api/v1';
@@ -218,45 +224,58 @@ async function fetchDuneVolume(
     // pre-defined SQL queries that return all historical data.
     // We filter by checking if weeks overlap with the requested date range.
     
-    // Fetch all results from Dune (handle pagination)
+    // Check cache first - cache the entire query result set (all rows)
+    const cachedRows = await getCachedDuneVolume(queryId, null);
     let allRows: any[] = [];
-    let offset = 0;
-    const limit = 1000;
-    let hasMore = true;
+    
+    if (cachedRows && Array.isArray(cachedRows) && cachedRows.length > 0) {
+      console.log(`Cache hit for Dune query ${queryId} (${cachedRows.length} rows)`);
+      allRows = cachedRows;
+    } else {
+      // Cache miss - fetch all results from Dune (handle pagination)
+      let offset = 0;
+      const limit = 1000;
+      let hasMore = true;
 
-    while (hasMore) {
-      const url = `${DUNE_API_BASE}/query/${queryId}/results?limit=${limit}&offset=${offset}`;
-      const response = await fetch(url, {
-        headers: {
-          'x-dune-api-key': DUNE_API_KEY,
-        },
-      });
+      while (hasMore) {
+        const url = `${DUNE_API_BASE}/query/${queryId}/results?limit=${limit}&offset=${offset}`;
+        const response = await fetch(url, {
+          headers: {
+            'x-dune-api-key': DUNE_API_KEY,
+          },
+        });
 
-      if (!response.ok) {
-        console.error(`Dune API error for query ${queryId}:`, response.status, response.statusText);
-        return {
-          volumeInRange: null,
-          volume24h: null,
-          volume7d: null,
-          volume30d: null,
-          isHistorical: false,
-          isMonadSpecific: false,
-        };
-      }
-
-      const data = await response.json();
-      
-      if (data.result && data.result.rows) {
-        allRows = allRows.concat(data.result.rows);
-        
-        // Check if there are more results
-        if (data.result.rows.length < limit || !data.next_uri) {
-          hasMore = false;
-        } else {
-          offset += limit;
+        if (!response.ok) {
+          console.error(`Dune API error for query ${queryId}:`, response.status, response.statusText);
+          return {
+            volumeInRange: null,
+            volume24h: null,
+            volume7d: null,
+            volume30d: null,
+            isHistorical: false,
+            isMonadSpecific: false,
+          };
         }
-      } else {
-        hasMore = false;
+
+        const data = await response.json();
+        
+        if (data.result && data.result.rows) {
+          allRows = allRows.concat(data.result.rows);
+          
+          // Check if there are more results
+          if (data.result.rows.length < limit || !data.next_uri) {
+            hasMore = false;
+          } else {
+            offset += limit;
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+      
+      // Cache the entire result set
+      if (allRows.length > 0) {
+        await cacheDuneVolume(queryId, null, allRows);
       }
     }
 
@@ -624,6 +643,18 @@ async function fetchDEXVolume(protocolSlug: string, startTimestamp: number, endT
  */
 async function fetchProtocolTVL(protocolSlug: string, endTimestamp: number): Promise<{ tvl: number | null; isHistorical: boolean }> {
   try {
+    // Generate cache key from date
+    const endDate = new Date(endTimestamp * 1000).toISOString().split('T')[0];
+    
+    // Check cache first
+    const cachedTVL = await getCachedDefillamaTVL(protocolSlug, endDate);
+    if (cachedTVL !== null) {
+      console.log(`Cache hit for TVL: ${protocolSlug} on ${endDate}`);
+      // We can't determine if cached value is historical, so assume it is
+      return { tvl: cachedTVL, isHistorical: true };
+    }
+
+    // Cache miss - fetch from API
     const url = `${DEFILLAMA_API_BASE}/protocol/${protocolSlug}`;
     const response = await globalThis.fetch(url);
     
@@ -636,6 +667,9 @@ async function fetchProtocolTVL(protocolSlug: string, endTimestamp: number): Pro
     
     const data = await response.json();
     
+    let resultTVL: number | null = null;
+    let isHistorical = false;
+    
     // Try to get historical TVL for Monad chain at end date
     if (data.chainTvls && typeof data.chainTvls === 'object') {
       // Try different case variations for Monad chain
@@ -646,28 +680,36 @@ async function fetchProtocolTVL(protocolSlug: string, endTimestamp: number): Pro
       if (monadChainData && monadChainData.tvl && Array.isArray(monadChainData.tvl)) {
         const historicalTVL = getTVLAtDate(monadChainData.tvl, endTimestamp);
         if (historicalTVL !== null) {
-          return { tvl: historicalTVL, isHistorical: true };
+          resultTVL = historicalTVL;
+          isHistorical = true;
         }
       }
     }
     
     // Fallback to current TVL if historical data not available
-    if (data.currentChainTvls && typeof data.currentChainTvls === 'object') {
+    if (resultTVL === null && data.currentChainTvls && typeof data.currentChainTvls === 'object') {
       const monadTVL = data.currentChainTvls['Monad'] || 
                        data.currentChainTvls['monad'] || 
                        data.currentChainTvls['MONAD'];
       
       if (monadTVL !== undefined && monadTVL !== null) {
-        return { tvl: parseFloat(String(monadTVL)), isHistorical: false };
+        resultTVL = parseFloat(String(monadTVL));
+        isHistorical = false;
       }
       
       // If no Monad-specific TVL, return total TVL for single-chain protocols
-      if (data.chains && Array.isArray(data.chains) && data.chains.length === 1) {
-        return { tvl: data.tvl || null, isHistorical: false };
+      if (resultTVL === null && data.chains && Array.isArray(data.chains) && data.chains.length === 1) {
+        resultTVL = data.tvl || null;
+        isHistorical = false;
       }
     }
     
-    return { tvl: null, isHistorical: false };
+    // Cache the result if we got a value
+    if (resultTVL !== null) {
+      await cacheDefillamaTVL(protocolSlug, endDate, resultTVL);
+    }
+    
+    return { tvl: resultTVL, isHistorical };
   } catch (error) {
     console.error(`Error fetching TVL for ${protocolSlug}:`, error);
     return { tvl: null, isHistorical: false };

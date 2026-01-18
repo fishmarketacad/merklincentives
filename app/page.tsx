@@ -65,7 +65,7 @@ function HomeContent() {
   const [protocols, setProtocols] = useState<string[]>([]);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [monPrice, setMonPrice] = useState('');
+  const [monPrice, setMonPrice] = useState('0.025');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<QueryResult[]>([]);
   const [error, setError] = useState('');
@@ -114,6 +114,9 @@ function HomeContent() {
     }
     if (urlMonPrice) {
       setMonPrice(urlMonPrice);
+    } else {
+      // Set default MON price
+      setMonPrice('0.025');
     }
     setIsInitialized(true);
   }, [searchParams]);
@@ -660,12 +663,17 @@ function HomeContent() {
 
     try {
       const aiData = prepareAIData();
+      // Include all campaigns and opportunities for comprehensive analysis
+      const aiDataWithAll = {
+        ...aiData,
+        includeAllData: true,
+      };
       const response = await fetch('/api/ai-analysis', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(aiData),
+        body: JSON.stringify(aiDataWithAll),
       });
 
       const data = await response.json();

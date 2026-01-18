@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { 
+  getCachedMerklCampaigns, 
+  cacheMerklCampaigns,
+  getCachedMerklOpportunities,
+  cacheMerklOpportunities 
+} from '@/app/lib/cache';
 
 const XAI_API_KEY = process.env.XAI_API_KEY || process.env.GROK_API_KEY;
 const XAI_API_BASE = 'https://api.x.ai/v1';
+const MERKL_API_BASE = 'https://api.merkl.xyz';
+const MONAD_CHAIN_ID = 143;
 
 interface PoolData {
   protocol: string;
@@ -30,6 +38,146 @@ interface AnalysisRequest {
     startDate: string;
     endDate: string;
   } | null;
+  // Optional: if true, fetch all campaigns and opportunities
+  includeAllData?: boolean;
+}
+
+/**
+ * Fetch all campaigns on Monad chain (with caching)
+ */
+async function fetchAllCampaignsOnMonad(): Promise<any[]> {
+  const campaigns: any[] = [];
+  let page = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    try {
+      // Check cache first
+      const cached = await getCachedMerklCampaigns('all', page);
+      if (cached && cached.length > 0) {
+        console.log(`Cache hit for all campaigns page ${page}`);
+        campaigns.push(...cached);
+        if (cached.length < 100) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+        continue;
+      }
+
+      // Cache miss - fetch from API
+      const url = `${MERKL_API_BASE}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100`;
+      const response = await globalThis.fetch(url);
+      
+      if (!response.ok) {
+        console.error(`Failed to fetch campaigns page ${page}: ${response.status}`);
+        hasMore = false;
+        break;
+      }
+
+      const data = await response.json();
+      let pageCampaigns: any[] = [];
+      
+      if (Array.isArray(data)) {
+        pageCampaigns = data;
+      } else if (data.data && Array.isArray(data.data)) {
+        pageCampaigns = data.data;
+      } else if (data.campaigns && Array.isArray(data.campaigns)) {
+        pageCampaigns = data.campaigns;
+      }
+
+      if (pageCampaigns.length === 0) {
+        hasMore = false;
+      } else {
+        campaigns.push(...pageCampaigns);
+        // Cache the fetched campaigns
+        await cacheMerklCampaigns('all', page, pageCampaigns);
+        
+        if (pageCampaigns.length < 100) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+      }
+
+      // Rate limiting (only for API calls, not cached)
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (error) {
+      console.error(`Error fetching campaigns page ${page}:`, error);
+      hasMore = false;
+    }
+  }
+
+  return campaigns;
+}
+
+/**
+ * Fetch all opportunities on Monad chain (with caching)
+ */
+async function fetchAllOpportunitiesOnMonad(): Promise<any[]> {
+  const opportunities: any[] = [];
+  let page = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    try {
+      // Check cache first
+      const cached = await getCachedMerklOpportunities(page);
+      if (cached && cached.length > 0) {
+        console.log(`Cache hit for opportunities page ${page}`);
+        opportunities.push(...cached);
+        if (cached.length < 100) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+        continue;
+      }
+
+      // Cache miss - fetch from API
+      const url = `${MERKL_API_BASE}/v4/opportunities?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100&status=LIVE,PAST,SOON`;
+      const response = await globalThis.fetch(url);
+      
+      if (!response.ok) {
+        console.error(`Failed to fetch opportunities page ${page}: ${response.status}`);
+        hasMore = false;
+        break;
+      }
+
+      const data = await response.json();
+      let pageOpportunities: any[] = [];
+      
+      if (Array.isArray(data)) {
+        pageOpportunities = data;
+      } else if (data.data && Array.isArray(data.data)) {
+        pageOpportunities = data.data;
+      } else if (data.opportunities && Array.isArray(data.opportunities)) {
+        pageOpportunities = data.opportunities;
+      }
+
+      if (pageOpportunities.length === 0) {
+        hasMore = false;
+      } else {
+        opportunities.push(...pageOpportunities);
+        // Cache the fetched opportunities
+        await cacheMerklOpportunities(page, pageOpportunities);
+        
+        if (pageOpportunities.length < 100) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+      }
+
+      // Rate limiting (only for API calls, not cached)
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (error) {
+      console.error(`Error fetching opportunities page ${page}:`, error);
+      hasMore = false;
+    }
+  }
+
+  return opportunities;
 }
 
 /**
@@ -65,7 +213,7 @@ function groupSimilarPools(pools: PoolData[]): Record<string, PoolData[]> {
 /**
  * Generate prompt for Elfa AI analysis
  */
-function generateAnalysisPrompt(request: AnalysisRequest): string {
+async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: any[], allOpportunities?: any[]): Promise<string> {
   const { currentWeek, previousWeek } = request;
   const similarPools = groupSimilarPools(currentWeek.pools);
   
@@ -133,6 +281,70 @@ function generateAnalysisPrompt(request: AnalysisRequest): string {
   if (previousWeek) {
     prompt += `\n## Previous Week Comparison\n`;
     prompt += `Previous week had ${previousWeek.pools.length} pools. Compare TVL Costs and identify significant changes.\n`;
+  }
+
+  // Add all campaigns context (vampire campaigns, competitive shifts)
+  if (allCampaigns && allCampaigns.length > 0) {
+    prompt += `\n## All Active Campaigns on Monad (Competitive Context)\n`;
+    prompt += `There are ${allCampaigns.length} total campaigns on Monad. This includes campaigns from protocols not in your selected list.\n`;
+    prompt += `Use this to identify:\n`;
+    prompt += `- Vampire campaigns (campaigns targeting the same assets/markets)\n`;
+    prompt += `- Competitive shifts (new campaigns that might affect TVL)\n`;
+    prompt += `- Campaigns that ended (explaining why TVL might have shifted)\n`;
+    
+    // Group campaigns by protocol
+    const campaignsByProtocol: Record<string, any[]> = {};
+    for (const campaign of allCampaigns) {
+      const protocolId = campaign.mainProtocolId || campaign.protocol?.id || 'unknown';
+      if (!campaignsByProtocol[protocolId]) {
+        campaignsByProtocol[protocolId] = [];
+      }
+      campaignsByProtocol[protocolId].push(campaign);
+    }
+    
+    prompt += `\n### Campaigns by Protocol:\n`;
+    for (const [protocolId, campaigns] of Object.entries(campaignsByProtocol)) {
+      prompt += `- ${protocolId}: ${campaigns.length} campaigns\n`;
+    }
+  }
+
+  // Add all opportunities context (pools without incentives)
+  if (allOpportunities && allOpportunities.length > 0) {
+    prompt += `\n## All Pools/Markets on Monad (Full Competitive Landscape)\n`;
+    prompt += `There are ${allOpportunities.length} total opportunities (pools/markets) on Monad.\n`;
+    prompt += `This includes pools that DON'T have incentives. Use this to:\n`;
+    prompt += `- Identify the full competitive set for each token pair\n`;
+    prompt += `- Understand which pools are missing incentives (potential opportunities)\n`;
+    prompt += `- See the complete market landscape beyond just incentivized pools\n`;
+    
+    // Group opportunities by protocol
+    const opportunitiesByProtocol: Record<string, any[]> = {};
+    for (const opp of allOpportunities) {
+      const protocolId = opp.mainProtocolId || opp.protocol?.id || 'unknown';
+      if (!opportunitiesByProtocol[protocolId]) {
+        opportunitiesByProtocol[protocolId] = [];
+      }
+      opportunitiesByProtocol[protocolId].push(opp);
+    }
+    
+    prompt += `\n### Opportunities by Protocol:\n`;
+    for (const [protocolId, opportunities] of Object.entries(opportunitiesByProtocol)) {
+      prompt += `- ${protocolId}: ${opportunities.length} pools/markets\n`;
+    }
+    
+    // Identify pools without incentives
+    const incentivizedPoolIds = new Set(
+      currentWeek.pools.map(p => `${p.protocol}-${p.marketName}`)
+    );
+    const poolsWithoutIncentives = allOpportunities.filter(opp => {
+      const oppKey = `${opp.mainProtocolId || opp.protocol?.id || 'unknown'}-${opp.name || opp.explorerAddress || ''}`;
+      return !incentivizedPoolIds.has(oppKey);
+    });
+    
+    if (poolsWithoutIncentives.length > 0) {
+      prompt += `\n### Pools Without Incentives (${poolsWithoutIncentives.length} pools):\n`;
+      prompt += `These pools exist but don't have incentives. Consider if they should be incentivized or if they're competing with incentivized pools.\n`;
+    }
   }
 
   prompt += `\n## Your Analysis Tasks
@@ -270,7 +482,7 @@ async function callGrokAI(prompt: string): Promise<any> {
 export async function POST(request: NextRequest) {
   try {
     const body: AnalysisRequest = await request.json();
-    const { currentWeek, previousWeek } = body;
+    const { currentWeek, previousWeek, includeAllData } = body;
 
     // Prepare pool data
     const pools: PoolData[] = currentWeek.pools.map(pool => ({
@@ -278,14 +490,32 @@ export async function POST(request: NextRequest) {
       tokenPair: extractTokenPair(pool.marketName),
     }));
 
+    // Fetch all campaigns and opportunities if requested
+    let allCampaigns: any[] | undefined;
+    let allOpportunities: any[] | undefined;
+    
+    if (includeAllData !== false) { // Default to true if not specified
+      console.log('Fetching all campaigns and opportunities on Monad...');
+      try {
+        [allCampaigns, allOpportunities] = await Promise.all([
+          fetchAllCampaignsOnMonad(),
+          fetchAllOpportunitiesOnMonad(),
+        ]);
+        console.log(`Fetched ${allCampaigns.length} campaigns and ${allOpportunities.length} opportunities`);
+      } catch (error: any) {
+        console.error('Error fetching all data:', error);
+        // Continue without all data if fetch fails
+      }
+    }
+
     // Generate prompt
-    const prompt = generateAnalysisPrompt({
+    const prompt = await generateAnalysisPrompt({
       currentWeek: {
         ...currentWeek,
         pools,
       },
       previousWeek,
-    });
+    }, allCampaigns, allOpportunities);
 
     // Log prompt for debugging (remove in production)
     console.log('=== AI Analysis Prompt ===');
