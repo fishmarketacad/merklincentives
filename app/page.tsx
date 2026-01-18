@@ -1078,7 +1078,7 @@ function HomeContent() {
                     </ul>
                   </div>
                 )}
-              </div>
+              </details>
             )}
 
             {/* Table View */}
