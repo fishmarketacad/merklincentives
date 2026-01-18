@@ -1026,26 +1026,29 @@ function HomeContent() {
                               {explanation.change > 0 ? '+' : ''}{explanation.change.toFixed(2)}%
                             </span>
                           </div>
-                          <p className="text-gray-300 text-sm mb-1">{explanation.explanation}</p>
-                          <p className="text-gray-400 text-xs mb-2">Likely cause: {explanation.likelyCause}</p>
+                          <p className="text-gray-300 text-sm mb-1 text-left">{explanation.explanation}</p>
+                          <p className="text-gray-400 text-xs mb-2 text-left">Likely cause: {explanation.likelyCause}</p>
                           {explanation.competitorLinks && explanation.competitorLinks.length > 0 && (
-                            <div className="mt-2 pt-2 border-t border-gray-700">
+                            <div className="mt-2 pt-2 border-t border-gray-700 text-left">
                               <p className="text-gray-400 text-xs mb-1">Competing pools:</p>
                               {explanation.competitorLinks.map((competitor: any, cIdx: number) => (
                                 <div key={cIdx} className="text-xs text-gray-300 mb-1">
                                   <span className="text-purple-300">{competitor.protocol} {competitor.marketName}</span>
+                                  {competitor.apr !== undefined && competitor.apr !== null && (
+                                    <span className="text-gray-400 ml-2">(APR: {competitor.apr.toFixed(2)}%)</span>
+                                  )}
                                   {competitor.merklUrl && (
                                     <a 
                                       href={competitor.merklUrl} 
-            target="_blank"
-            rel="noopener noreferrer"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
                                       className="ml-2 text-purple-400 hover:text-purple-300 underline"
                                     >
                                       [View on Merkl]
                                     </a>
                                   )}
                                   {competitor.reason && (
-                                    <span className="text-gray-400 ml-2">({competitor.reason})</span>
+                                    <span className="text-gray-400 ml-2">- {competitor.reason}</span>
                                   )}
                                 </div>
                               ))}
@@ -1328,6 +1331,12 @@ function HomeContent() {
                         // Calculate WoW Change for Volume Cost
                         const volumeWowChange = calculateWoWChange(volumeCost, prevVolumeCost);
                         
+                        // Calculate percentage changes for display
+                        const incentiveMONChange = prevMarket ? calculateWoWChange(market.totalMON, prevMarket.totalMON) : null;
+                        const incentiveUSDChange = prevIncentiveUSD ? calculateWoWChange(incentiveUSD, prevIncentiveUSD) : null;
+                        const tvlChange = (prevMarket?.tvl !== undefined && market.tvl !== undefined) ? calculateWoWChange(market.tvl ?? null, prevMarket.tvl ?? null) : null;
+                        const volumeChange = prevVolumeValue ? calculateWoWChange(volumeValue, prevVolumeValue) : null;
+                        
                         return {
                           platform,
                           funding,
@@ -1351,6 +1360,10 @@ function HomeContent() {
                           prevVolumeError,
                           prevVolumeCost,
                           volumeWowChange,
+                          incentiveMONChange,
+                          incentiveUSDChange,
+                          tvlChange,
+                          volumeChange,
                         };
                       })
                     );
@@ -1449,16 +1462,54 @@ function HomeContent() {
                               )}
                             </td>
                             <td className="py-3 px-4 text-sm text-right text-white font-medium">
-                              {row.market.totalMON.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              {(() => {
+                                const value = row.market.totalMON.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                const change = row.incentiveMONChange;
+                                if (change !== null) {
+                                  const changeColor = change > 10 ? 'text-red-400' : change < -10 ? 'text-green-400' : 'text-gray-400';
+                                  return (
+                                    <span>
+                                      {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
+                                    </span>
+                                  );
+                                }
+                                return value;
+                              })()}
                             </td>
                             {monPrice && parseFloat(monPrice) > 0 && (
                               <td className="py-3 px-4 text-sm text-right text-gray-300">
-                                {row.incentiveUSD ? `$${row.incentiveUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '-'}
+                                {(() => {
+                                  if (!row.incentiveUSD) return '-';
+                                  const value = `$${row.incentiveUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                                  const change = row.incentiveUSDChange;
+                                  if (change !== null) {
+                                    const changeColor = change > 10 ? 'text-red-400' : change < -10 ? 'text-green-400' : 'text-gray-400';
+                                    return (
+                                      <span>
+                                        {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
+                                      </span>
+                                    );
+                                  }
+                                  return value;
+                                })()}
                               </td>
                             )}
                             <td className="py-3 px-4 text-sm text-right text-gray-400">{row.periodDays}</td>
                             <td className="py-3 px-4 text-sm text-right text-gray-300">
-                              {row.market.tvl ? `$${(row.market.tvl / 1000000).toFixed(2)}M` : '-'}
+                              {(() => {
+                                if (!row.market.tvl) return '-';
+                                const value = `$${(row.market.tvl / 1000000).toFixed(2)}M`;
+                                const change = row.tvlChange;
+                                if (change !== null) {
+                                  const changeColor = change > 10 ? 'text-red-400' : change < -10 ? 'text-green-400' : 'text-gray-400';
+                                  return (
+                                    <span>
+                                      {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
+                                    </span>
+                                  );
+                                }
+                                return value;
+                              })()}
                             </td>
                             <td className={`py-3 px-4 text-sm text-right font-medium ${
                               row.tvlCost && row.tvlCost > 50 ? 'text-red-400' : row.tvlCost && row.tvlCost > 20 ? 'text-yellow-400' : 'text-green-400'
@@ -1474,7 +1525,7 @@ function HomeContent() {
                                       <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
                                         {content}
                                       </span>
-                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case">
+                                      <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left">
                                         {tooltip}
                                       </div>
                                     </div>
@@ -1497,7 +1548,7 @@ function HomeContent() {
                                       <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
                                         {content}
                                       </span>
-                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case">
+                                      <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left">
                                         {tooltip}
                                       </div>
                                     </div>
@@ -1507,13 +1558,23 @@ function HomeContent() {
                               })()}
                             </td>
                             <td className="py-3 px-4 text-sm text-right text-gray-300">
-                              {row.volumeError ? (
-                                <span className="text-red-400 text-xs" title={row.volumeError}>Not Found</span>
-                              ) : row.volumeValue ? (
-                                `$${(row.volumeValue / 1000000).toFixed(2)}M`
-                              ) : (
-                                '-'
-                              )}
+                              {(() => {
+                                if (row.volumeError) {
+                                  return <span className="text-red-400 text-xs" title={row.volumeError}>Not Found</span>;
+                                }
+                                if (!row.volumeValue) return '-';
+                                const value = `$${(row.volumeValue / 1000000).toFixed(2)}M`;
+                                const change = row.volumeChange;
+                                if (change !== null) {
+                                  const changeColor = change > 10 ? 'text-red-400' : change < -10 ? 'text-green-400' : 'text-gray-400';
+                                  return (
+                                    <span>
+                                      {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
+                                    </span>
+                                  );
+                                }
+                                return value;
+                              })()}
                             </td>
                             <td className={`py-3 px-4 text-sm text-right font-medium ${
                               row.volumeCost && row.volumeCost > 50 ? 'text-red-400' : row.volumeCost && row.volumeCost > 20 ? 'text-yellow-400' : row.volumeCost !== null ? 'text-green-400' : 'text-gray-400'
@@ -1529,7 +1590,7 @@ function HomeContent() {
                                       <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
                                         {content}
                                       </span>
-                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case">
+                                      <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left">
                                         {tooltip}
                                       </div>
                                     </div>
@@ -1552,7 +1613,7 @@ function HomeContent() {
                                       <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
                                         {content}
                                       </span>
-                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case">
+                                      <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left">
                                         {tooltip}
                                       </div>
                                     </div>

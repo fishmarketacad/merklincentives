@@ -412,9 +412,10 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
         for (const opp of examples.slice(0, 5)) {
           const protocolId = opp.mainProtocolId || opp.protocol?.id || 'unknown';
           const oppName = opp.name || opp.opportunityId || 'Unknown';
+          const oppAPR = opp.apr !== undefined ? parseFloat(String(opp.apr)) : null;
           const merklUrl = `https://app.merkl.xyz/chains/monad?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
           
-          prompt += `- ${protocolId}: "${oppName}" [Merkl: ${merklUrl}]\n`;
+          prompt += `- ${protocolId}: "${oppName}"${oppAPR !== null ? ` (APR: ${oppAPR.toFixed(2)}%)` : ''} [Merkl: ${merklUrl}]\n`;
         }
         
         if (examples.length > 5) {
