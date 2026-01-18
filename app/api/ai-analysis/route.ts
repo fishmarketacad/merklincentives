@@ -24,6 +24,7 @@ interface PoolData {
   tvlCost: number | null;
   wowChange: number | null;
   periodDays: number;
+  merklUrl?: string; // Link to Merkl opportunity page
 }
 
 interface AnalysisRequest {
@@ -349,13 +350,14 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
     }
   }
 
-  // Add similar pools comparison
+  // Add similar pools comparison with Merkl URLs
   prompt += `\n## Similar Pools Comparison\n`;
   for (const [tokenPair, pools] of Object.entries(similarPools)) {
     if (pools.length > 1) {
       prompt += `\n### ${tokenPair.toUpperCase()} Pools (${pools.length} pools)\n`;
       for (const pool of pools) {
-        prompt += `- ${pool.protocol} (${pool.fundingProtocol}): TVL Cost ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}, APR ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}\n`;
+        const merklLink = pool.merklUrl ? ` [Merkl: ${pool.merklUrl}]` : '';
+        prompt += `- ${pool.protocol} (${pool.fundingProtocol}): TVL Cost ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}, APR ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}${merklLink}\n`;
       }
     }
   }
@@ -425,6 +427,10 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
       const startDate = campaign.startTimestamp ? new Date(parseInt(String(campaign.startTimestamp)) * 1000).toISOString().split('T')[0] : 'unknown';
       const endDate = campaign.endTimestamp ? new Date(parseInt(String(campaign.endTimestamp)) * 1000).toISOString().split('T')[0] : 'unknown';
       
+      // Generate Merkl URL for this campaign
+      // Use search page format: https://app.merkl.xyz/chains/monad?search={protocolId}&status=LIVE%2CSOON%2CPAST
+      const merklUrl = `https://app.merkl.xyz/chains/monad?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
+      
       campaignsByTokenPair[matchedTokenPair].push({
         ...campaign,
         protocolId,
@@ -432,6 +438,7 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
         opportunityId,
         startDate,
         endDate,
+        merklUrl,
       });
     }
     
@@ -445,7 +452,7 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
       if (campaigns.length > 0) {
         prompt += `\n**${tokenPair.toUpperCase()}** (${campaigns.length} competing campaigns):\n`;
         for (const campaign of campaigns.slice(0, 15)) {
-          prompt += `- ${campaign.protocolId} (funded by ${campaign.fundingProtocol}) - Opportunity: ${campaign.opportunityId || 'N/A'} - Active: ${campaign.startDate} to ${campaign.endDate}\n`;
+            prompt += `- ${campaign.protocolId} (funded by ${campaign.fundingProtocol}) - Opportunity: ${campaign.opportunityId || 'N/A'} - Active: ${campaign.startDate} to ${campaign.endDate} [Merkl: ${campaign.merklUrl || 'N/A'}]\n`;
         }
         if (campaigns.length > 15) {
           prompt += `  ... and ${campaigns.length - 15} more ${tokenPair} campaigns\n`;
@@ -458,7 +465,7 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
       if (!allTokenPairs.has(assetType) && campaigns.length > 0) {
         prompt += `\n**${assetType.toUpperCase()}** (${campaigns.length} campaigns - no matching pools in current selection):\n`;
         for (const campaign of campaigns.slice(0, 10)) {
-          prompt += `- ${campaign.protocolId} (funded by ${campaign.fundingProtocol}) - Opportunity: ${campaign.opportunityId || 'N/A'}\n`;
+            prompt += `- ${campaign.protocolId} (funded by ${campaign.fundingProtocol}) - Opportunity: ${campaign.opportunityId || 'N/A'} [Merkl: ${campaign.merklUrl || 'N/A'}]\n`;
         }
         if (campaigns.length > 10) {
           prompt += `  ... and ${campaigns.length - 10} more\n`;
@@ -519,11 +526,13 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
 3. **WoW Change Explanations**: For each pool with WoW change >20% or <-20%:
    - FIRST check if incentives changed (compare current vs previous week incentives)
    - If incentives dropped significantly, note that cost drop is due to lower incentives, not efficiency
-   - If incentives stayed similar, identify SPECIFIC competitor campaigns from "All Active Campaigns" that:
-     * Target the same assets/token pairs
-     * Have better TVL Cost or higher incentives
-     * Name the specific protocol, funding protocol, and market
-   - Do NOT just say "competitors" - be specific
+   - If incentives stayed similar, identify SPECIFIC competitor pools from "Similar Pools Comparison" section:
+     * Find pools with the SAME token pair (e.g., if analyzing MON-USDC, find other MON-USDC pools)
+     * Compare their TVL Costs - if another pool has lower TVL Cost or higher incentives, it likely attracted TVL away
+     * Include competitorLinks array with Merkl URLs for each competing pool
+     * Name the specific protocol, funding protocol, and market name
+   - Also check "All Active Campaigns" for additional context
+   - Do NOT just say "competitors" - be specific and include Merkl links in competitorLinks array
 
 4. **Recommendations**: Provide actionable recommendations to improve efficiency.
    - Focus on comparisons within the same asset type
@@ -545,7 +554,15 @@ Format your response as JSON with this structure:
       "poolId": "protocol-fundingProtocol-marketName",
       "change": 15.5,
       "explanation": "explanation of change",
-      "likelyCause": "competitor pools|TVL shift|new pools|other"
+      "likelyCause": "competitor_pools|tvl_shift|new_pools|incentive_change|other",
+      "competitorLinks": [
+        {
+          "protocol": "competitor protocol name",
+          "marketName": "competitor market name",
+          "merklUrl": "https://app.merkl.xyz/chains/monad?search=...",
+          "reason": "why this competitor is relevant (e.g., lower TVL Cost, higher incentives)"
+        }
+      ]
     }
   ],
   "recommendations": ["recommendation1", "recommendation2", ...]

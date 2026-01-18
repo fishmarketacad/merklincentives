@@ -607,6 +607,7 @@ function HomeContent() {
             tvlCost,
             wowChange,
             periodDays,
+            merklUrl: market.merklUrl, // Include Merkl URL for AI analysis
           };
         })
       );
@@ -795,8 +796,8 @@ function HomeContent() {
             </div>
             <p className="text-xs text-gray-400 mt-2 font-medium">
               Selected: <span className="text-purple-400 font-bold">{protocols.length}</span> protocol{protocols.length !== 1 ? 's' : ''}
-            </p>
-          </div>
+          </p>
+        </div>
 
           {/* Query Button */}
           <button
@@ -974,7 +975,30 @@ function HomeContent() {
                             </span>
                           </div>
                           <p className="text-gray-300 text-sm mb-1">{explanation.explanation}</p>
-                          <p className="text-gray-400 text-xs">Likely cause: {explanation.likelyCause}</p>
+                          <p className="text-gray-400 text-xs mb-2">Likely cause: {explanation.likelyCause}</p>
+                          {explanation.competitorLinks && explanation.competitorLinks.length > 0 && (
+                            <div className="mt-2 pt-2 border-t border-gray-700">
+                              <p className="text-gray-400 text-xs mb-1">Competing pools:</p>
+                              {explanation.competitorLinks.map((competitor: any, cIdx: number) => (
+                                <div key={cIdx} className="text-xs text-gray-300 mb-1">
+                                  <span className="text-purple-300">{competitor.protocol} {competitor.marketName}</span>
+                                  {competitor.merklUrl && (
+                                    <a 
+                                      href={competitor.merklUrl} 
+            target="_blank"
+            rel="noopener noreferrer"
+                                      className="ml-2 text-purple-400 hover:text-purple-300 underline"
+                                    >
+                                      [View on Merkl]
+                                    </a>
+                                  )}
+                                  {competitor.reason && (
+                                    <span className="text-gray-400 ml-2">({competitor.reason})</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
