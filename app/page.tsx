@@ -1470,12 +1470,14 @@ function HomeContent() {
                                 
                                 if (tooltip) {
                                   return (
-                                    <span 
-                                      className="cursor-help underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400"
-                                      title={tooltip}
-                                    >
-                                      {content}
-                                    </span>
+                                    <div className="group relative inline-block cursor-help">
+                                      <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
+                                        {content}
+                                      </span>
+                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case">
+                                        {tooltip}
+                                      </div>
+                                    </div>
                                   );
                                 }
                                 return content;
@@ -1491,12 +1493,14 @@ function HomeContent() {
                                 
                                 if (tooltip) {
                                   return (
-                                    <span 
-                                      className="cursor-help underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400"
-                                      title={tooltip}
-                                    >
-                                      {content}
-                                    </span>
+                                    <div className="group relative inline-block cursor-help">
+                                      <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
+                                        {content}
+                                      </span>
+                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case">
+                                        {tooltip}
+                                      </div>
+                                    </div>
                                   );
                                 }
                                 return content;
@@ -1521,12 +1525,14 @@ function HomeContent() {
                                 
                                 if (tooltip) {
                                   return (
-                                    <span 
-                                      className="cursor-help underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400"
-                                      title={tooltip}
-                                    >
-                                      {content}
-                                    </span>
+                                    <div className="group relative inline-block cursor-help">
+                                      <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
+                                        {content}
+                                      </span>
+                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case">
+                                        {tooltip}
+                                      </div>
+                                    </div>
                                   );
                                 }
                                 return content;
@@ -1542,12 +1548,14 @@ function HomeContent() {
                                 
                                 if (tooltip) {
                                   return (
-                                    <span 
-                                      className="cursor-help underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400"
-                                      title={tooltip}
-                                    >
-                                      {content}
-                                    </span>
+                                    <div className="group relative inline-block cursor-help">
+                                      <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
+                                        {content}
+                                      </span>
+                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case">
+                                        {tooltip}
+                                      </div>
+                                    </div>
                                   );
                                 }
                                 return content;
