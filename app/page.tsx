@@ -67,6 +67,8 @@ function HomeContent() {
   const [endDate, setEndDate] = useState('');
   const [monPrice, setMonPrice] = useState('0.025');
   const [loading, setLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [bulkAnalysisResult, setBulkAnalysisResult] = useState<any>(null);
   const [results, setResults] = useState<QueryResult[]>([]);
   const [error, setError] = useState('');
   const [isInitialized, setIsInitialized] = useState(false);
@@ -245,34 +247,184 @@ function HomeContent() {
     if (!aiAnalysis) return null;
 
     const normalizedPoolId = poolId.toLowerCase();
+    // Extract components from poolId: "protocol-fundingProtocol-marketName"
+    const poolIdParts = normalizedPoolId.split('-');
+    const protocol = poolIdParts[0];
+    const fundingProtocol = poolIdParts[1];
+    const marketName = poolIdParts.slice(2).join('-'); // Handle market names with dashes
 
-    // For TVL Cost: show efficiency issues
-    if (metricType === 'tvlCost' && aiAnalysis.efficiencyIssues) {
-      const issue = aiAnalysis.efficiencyIssues.find((issue: any) => 
-        issue.poolId.toLowerCase() === normalizedPoolId
-      );
-      if (issue) {
-        return `${issue.issue}\n\n💡 ${issue.recommendation}`;
+    // Extract token pair and fee from market name for better matching
+    // e.g., "Provide liquidity to UniswapV4 MON-USDC 0.05%" -> "MON-USDC" and "0.05%"
+    const extractTokenPairAndFee = (name: string): { tokenPair: string | null; fee: string | null } => {
+      const lowerName = name.toLowerCase();
+      // Try to extract token pair (e.g., "MON-USDC", "WBTC-WETH")
+      const tokenPairMatch = lowerName.match(/([a-z0-9]+)-([a-z0-9]+)/);
+      const tokenPair = tokenPairMatch ? `${tokenPairMatch[1]}-${tokenPairMatch[2]}` : null;
+      // Try to extract fee percentage (e.g., "0.05%", "0.0009%")
+      const feeMatch = lowerName.match(/(\d+\.?\d*)%/);
+      const fee = feeMatch ? feeMatch[1] : null;
+      return { tokenPair, fee };
+    };
+
+    const { tokenPair: ourTokenPair, fee: ourFee } = extractTokenPairAndFee(marketName);
+
+    // Helper function to check if a poolId matches (flexible matching)
+    const matchesPoolId = (aiPoolId: string): boolean => {
+      if (!aiPoolId) return false;
+      const aiNormalized = aiPoolId.toLowerCase();
+      // Exact match
+      if (aiNormalized === normalizedPoolId) return true;
+      
+      // Try matching by components (protocol-fundingProtocol-marketName)
+      const aiParts = aiNormalized.split('-');
+      if (aiParts.length >= 3) {
+        const aiProtocol = aiParts[0];
+        const aiFunding = aiParts[1];
+        const aiMarket = aiParts.slice(2).join('-');
+        
+        // Match if protocol and funding match
+        if (aiProtocol === protocol && aiFunding === fundingProtocol) {
+          // Try exact market name match
+          if (aiMarket === marketName || marketName.includes(aiMarket) || aiMarket.includes(marketName)) {
+            return true;
+          }
+          
+          // Try token pair + fee matching (for simplified AI poolIds like "MON-USDC-0.05%")
+          const { tokenPair: aiTokenPair, fee: aiFee } = extractTokenPairAndFee(aiMarket);
+          if (ourTokenPair && aiTokenPair && ourTokenPair === aiTokenPair) {
+            // If fees match or one is missing, consider it a match
+            if (!ourFee || !aiFee || ourFee === aiFee) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    };
+
+    // Helper function to check if a poolName matches our market name
+    const matchesPoolName = (poolName: string): boolean => {
+      if (!poolName) return false;
+      const normalizedName = poolName.toLowerCase();
+      // Direct substring match
+      if (normalizedName.includes(marketName.toLowerCase()) || marketName.toLowerCase().includes(normalizedName)) {
+        return true;
+      }
+      // Token pair + fee matching
+      const { tokenPair: nameTokenPair, fee: nameFee } = extractTokenPairAndFee(normalizedName);
+      if (ourTokenPair && nameTokenPair && ourTokenPair === nameTokenPair) {
+        if (!ourFee || !nameFee || ourFee === nameFee) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // For TVL Cost: show efficiency issues OR WoW explanations if available
+    if (metricType === 'tvlCost') {
+      // First, check for WoW explanations (more relevant for understanding changes)
+      if (aiAnalysis.wowExplanations && Array.isArray(aiAnalysis.wowExplanations)) {
+        const explanation = aiAnalysis.wowExplanations.find((exp: any) => 
+          exp.poolId && matchesPoolId(exp.poolId)
+        );
+        if (explanation) {
+          let tooltip = explanation.explanation || '';
+          if (explanation.competitorLinks && explanation.competitorLinks.length > 0) {
+            tooltip += '\n\nCompeting pools:';
+            explanation.competitorLinks.forEach((competitor: any) => {
+              tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
+              if (competitor.reason) {
+                tooltip += ` (${competitor.reason})`;
+              }
+            });
+          }
+          return tooltip;
+        }
+      }
+      
+      // Then check pool-level efficiency issues
+      if (aiAnalysis.efficiencyIssues && Array.isArray(aiAnalysis.efficiencyIssues)) {
+        const issue = aiAnalysis.efficiencyIssues.find((issue: any) => 
+          issue.poolId && matchesPoolId(issue.poolId)
+        );
+        if (issue) {
+          return `${issue.issue}\n\n💡 ${issue.recommendation}`;
+        }
+      }
+      
+      // Check protocol-level efficiency issues (from protocolRecommendations)
+      if (aiAnalysis.protocolRecommendations && Array.isArray(aiAnalysis.protocolRecommendations)) {
+        for (const protocolRec of aiAnalysis.protocolRecommendations) {
+          if (protocolRec.protocol?.toLowerCase() === protocol) {
+            // Check if any key issues mention this pool
+            if (protocolRec.keyIssues && Array.isArray(protocolRec.keyIssues)) {
+              const relevantIssues = protocolRec.keyIssues.filter((issue: string) =>
+                issue.toLowerCase().includes(marketName.toLowerCase())
+              );
+              if (relevantIssues.length > 0) {
+                return relevantIssues.join('\n\n');
+              }
+            }
+          }
+        }
       }
     }
 
     // For WoW Changes: show explanations
-    if ((metricType === 'tvlCostWoW' || metricType === 'volumeCostWoW') && aiAnalysis.wowExplanations) {
-      const explanation = aiAnalysis.wowExplanations.find((exp: any) => 
-        exp.poolId.toLowerCase() === normalizedPoolId
-      );
-      if (explanation) {
-        let tooltip = explanation.explanation;
-        if (explanation.competitorLinks && explanation.competitorLinks.length > 0) {
-          tooltip += '\n\nCompeting pools:';
-          explanation.competitorLinks.forEach((competitor: any) => {
-            tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
-            if (competitor.reason) {
-              tooltip += ` (${competitor.reason})`;
-            }
-          });
+    if (metricType === 'tvlCostWoW' || metricType === 'volumeCostWoW') {
+      // Check pool-level wowExplanations
+      if (aiAnalysis.wowExplanations && Array.isArray(aiAnalysis.wowExplanations)) {
+        // Debug: log all poolIds from AI
+        if (process.env.NODE_ENV === 'development') {
+          console.log('Looking for tooltip for poolId:', poolId);
+          console.log('Available AI poolIds:', aiAnalysis.wowExplanations.map((exp: any) => exp.poolId));
         }
-        return tooltip;
+        
+        const explanation = aiAnalysis.wowExplanations.find((exp: any) => {
+          if (!exp.poolId) return false;
+          const matches = matchesPoolId(exp.poolId);
+          if (process.env.NODE_ENV === 'development' && matches) {
+            console.log('Found matching explanation for:', exp.poolId);
+          }
+          return matches;
+        });
+        if (explanation) {
+          let tooltip = explanation.explanation || '';
+          if (explanation.competitorLinks && explanation.competitorLinks.length > 0) {
+            tooltip += '\n\nCompeting pools:';
+            explanation.competitorLinks.forEach((competitor: any) => {
+              tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
+              if (competitor.reason) {
+                tooltip += ` (${competitor.reason})`;
+              }
+            });
+          }
+          return tooltip;
+        }
+      }
+      
+      // Check protocol-level poolLevelWowAnalysis
+      if (aiAnalysis.protocolRecommendations) {
+        for (const protocolRec of aiAnalysis.protocolRecommendations) {
+          if (protocolRec.protocol?.toLowerCase() === protocol && protocolRec.poolLevelWowAnalysis) {
+            const wowAnalysis = protocolRec.poolLevelWowAnalysis.find((analysis: any) =>
+              analysis.poolName && matchesPoolName(analysis.poolName)
+            );
+            if (wowAnalysis) {
+              let tooltip = wowAnalysis.explanation || '';
+              if (wowAnalysis.competitorLinks && wowAnalysis.competitorLinks.length > 0) {
+                tooltip += '\n\nCompeting pools:';
+                wowAnalysis.competitorLinks.forEach((competitor: any) => {
+                  tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
+                  if (competitor.reason) {
+                    tooltip += ` (${competitor.reason})`;
+                  }
+                });
+              }
+              return tooltip;
+            }
+          }
+        }
       }
     }
 
@@ -281,8 +433,8 @@ function HomeContent() {
       // Look for volume-related findings that might mention this pool
       const volumeFindings = aiAnalysis.keyFindings.filter((finding: string) => 
         finding.toLowerCase().includes('volume') && 
-        (finding.toLowerCase().includes(poolId.split('-')[0].toLowerCase()) || 
-         finding.toLowerCase().includes(poolId.split('-')[1].toLowerCase()))
+        (finding.toLowerCase().includes(protocol) || 
+         finding.toLowerCase().includes(marketName.toLowerCase()))
       );
       if (volumeFindings.length > 0) {
         return volumeFindings.join('\n\n');
@@ -705,6 +857,90 @@ function HomeContent() {
     };
   };
 
+  // Handle bulk protocol analysis
+  const handleBulkAnalysis = async () => {
+    if (protocols.length === 0) {
+      setError('Please select at least one protocol');
+      return;
+    }
+
+    if (!startDate || !endDate) {
+      setError('Please select both start and end dates');
+      return;
+    }
+
+    setAnalyzing(true);
+    setError('');
+    setBulkAnalysisResult(null);
+    const startTime = Date.now();
+
+    try {
+      const response = await fetch('/api/bulk-protocol-analysis', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          protocols,
+          startDate,
+          endDate,
+          monPrice: parseFloat(monPrice) || null,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to perform bulk analysis');
+      }
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setBulkAnalysisResult(data);
+        // Export report automatically
+        exportBulkAnalysisReport(data);
+        setError(''); // Clear any previous errors
+        // Show success message briefly
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        alert(`Analysis complete! Report downloaded. (Took ${elapsed}s)`);
+      } else {
+        throw new Error(data.error || 'Analysis failed');
+      }
+      
+    } catch (err: any) {
+      console.error('Bulk analysis error:', err);
+      setError(err.message || 'Failed to perform bulk analysis');
+      setBulkAnalysisResult(null);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  // Export bulk analysis report
+  const exportBulkAnalysisReport = (data: any) => {
+    const report = {
+      generatedAt: new Date().toISOString(),
+      dateRange: {
+        start: startDate,
+        end: endDate,
+      },
+      protocols: protocols,
+      analysis: data.analysis,
+      protocolData: data.protocolData,
+    };
+
+    const jsonStr = JSON.stringify(report, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `protocol-analysis-${startDate}-to-${endDate}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   // Handle AI analysis
   const handleAIAnalysis = async () => {
     if (results.length === 0) {
@@ -851,24 +1087,44 @@ function HomeContent() {
           </p>
         </div>
 
-          {/* Query Button */}
-          <button
-            onClick={handleQuery}
-            disabled={loading}
-            className="w-full bg-gradient-to-r from-purple-600 to-purple-700 text-white py-3 px-6 rounded-lg font-semibold text-lg hover:from-purple-500 hover:to-purple-600 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-purple-500/50 transform hover:scale-[1.02] active:scale-[0.98]"
-          >
-            {loading ? (
-              <span className="flex items-center justify-center">
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Querying...
-              </span>
-            ) : (
-              'Query MON Spent'
-            )}
-          </button>
+          {/* Query and Analyze Buttons */}
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              onClick={handleQuery}
+              disabled={loading || analyzing}
+              className="bg-gradient-to-r from-purple-600 to-purple-700 text-white py-3 px-6 rounded-lg font-semibold text-lg hover:from-purple-500 hover:to-purple-600 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-purple-500/50 transform hover:scale-[1.02] active:scale-[0.98]"
+            >
+              {loading ? (
+                <span className="flex items-center justify-center">
+                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Querying...
+                </span>
+              ) : (
+                'Query MON Spent'
+              )}
+            </button>
+            <button
+              onClick={handleBulkAnalysis}
+              disabled={loading || analyzing || protocols.length === 0}
+              className="bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-6 rounded-lg font-semibold text-lg hover:from-blue-500 hover:to-blue-600 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-blue-500/50 transform hover:scale-[1.02] active:scale-[0.98]"
+            >
+              {analyzing ? (
+                <span className="flex items-center justify-center">
+                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Analyzing...
+                </span>
+              ) : (
+                'Analyze'
+              )}
+            </button>
+          </div>
+
 
           {/* Error Message */}
           {error && (
