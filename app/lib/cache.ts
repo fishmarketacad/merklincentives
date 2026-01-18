@@ -7,6 +7,8 @@ import { createClient } from 'redis';
 
 // Create Redis client singleton
 let redisClient: ReturnType<typeof createClient> | null = null;
+let connectionAttempted = false; // Track if we've already tried to connect
+let connectionFailed = false; // Track if connection failed (to avoid repeated attempts)
 
 /**
  * Get or create Redis client
@@ -18,13 +20,29 @@ async function getRedisClient() {
     return redisClient;
   }
 
+  // If connection already failed, don't retry (prevents spam)
+  if (connectionFailed) {
+    return null;
+  }
+
   const redisUrl = process.env.REDIS_URL;
   if (!redisUrl) {
-    console.warn('REDIS_URL not set, caching disabled');
+    // Only warn once
+    if (!connectionAttempted) {
+      console.warn('REDIS_URL not set, caching disabled');
+      connectionAttempted = true;
+    }
+    return null;
+  }
+
+  // If we've already attempted connection and it failed, skip
+  if (connectionAttempted && !redisClient) {
     return null;
   }
 
   try {
+    connectionAttempted = true;
+
     // Redis Labs typically requires TLS - check if URL uses rediss://
     const isTLS = redisUrl.startsWith('rediss://');
     const isRedisLabs = redisUrl.includes('redislabs.com');
@@ -38,19 +56,15 @@ async function getRedisClient() {
     
     // Socket config - never set TLS when using rediss:// (protocol handles it)
     const socketConfig: any = {
-      connectTimeout: 10000, // 10 second timeout for Redis Labs
+      connectTimeout: 20000, // 20 second timeout for Redis Labs (increased for TLS handshake)
       reconnectStrategy: (retries: number) => {
-        if (retries > 3) {
-          console.error('Redis connection failed after 3 retries');
-          return false; // Stop retrying
+        if (retries > 1) {
+          // Stop retrying quickly to avoid spam
+          return false;
         }
-        return Math.min(retries * 100, 3000); // Exponential backoff
+        return 1000;
       },
     };
-
-    // Do NOT set TLS config when URL uses rediss:// - the protocol handles it
-    // Only set TLS if URL uses redis:// AND we need TLS (but we convert to rediss:// above)
-    // So we should never set TLS manually
 
     redisClient = createClient({
       url: urlToUse,
@@ -58,24 +72,42 @@ async function getRedisClient() {
     });
 
     redisClient.on('error', (err) => {
-      console.error('Redis Client Error:', err);
-      // Reset client on error so it can reconnect
+      // Only log first error to reduce noise
+      if (!connectionFailed) {
+        console.error('Redis Client Error:', err.message || err);
+        connectionFailed = true;
+      }
+      // Reset client on error
       redisClient = null;
     });
 
     if (!redisClient.isOpen) {
-      // Connect with timeout
+      // Connect with timeout matching socket config (20s)
       await Promise.race([
         redisClient.connect(),
         new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Redis connection timeout')), 5000)
+          setTimeout(() => {
+            connectionFailed = true;
+            reject(new Error('Redis connection timeout - check IP whitelist in Redis Labs dashboard'));
+          }, 20000) // Match socket connectTimeout
         ),
       ]);
     }
 
+    // Success - reset failure flag
+    connectionFailed = false;
     return redisClient;
-  } catch (error) {
-    console.error('Failed to connect to Redis:', error);
+  } catch (error: any) {
+    connectionFailed = true;
+    // Only log first failure with helpful message
+    if (connectionAttempted) {
+      const errorMsg = error.message || String(error);
+      if (errorMsg.includes('timeout') || errorMsg.includes('ECONNREFUSED')) {
+        console.warn('Redis connection failed. This is OK - caching disabled. If using Redis Labs, check IP whitelist in dashboard.');
+      } else {
+        console.error('Failed to connect to Redis:', errorMsg);
+      }
+    }
     redisClient = null;
     return null; // Return null instead of throwing - graceful fallback
   }
