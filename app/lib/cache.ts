@@ -10,30 +10,63 @@ let redisClient: ReturnType<typeof createClient> | null = null;
 
 /**
  * Get or create Redis client
+ * Returns null if connection fails (graceful fallback)
  */
 async function getRedisClient() {
+  // If client exists and is open, return it
   if (redisClient && redisClient.isOpen) {
     return redisClient;
   }
 
   const redisUrl = process.env.REDIS_URL;
   if (!redisUrl) {
-    throw new Error('REDIS_URL environment variable is not set');
+    console.warn('REDIS_URL not set, caching disabled');
+    return null;
   }
 
-  redisClient = createClient({
-    url: redisUrl,
-  });
+  try {
+    // Redis Labs may require TLS - check if URL uses rediss:// or if we need to add TLS
+    const isTLS = redisUrl.startsWith('rediss://');
+    const urlToUse = isTLS ? redisUrl : redisUrl.replace('redis://', 'rediss://');
+    
+    redisClient = createClient({
+      url: urlToUse,
+      socket: {
+        connectTimeout: 10000, // 10 second timeout for Redis Labs
+        tls: isTLS || redisUrl.includes('redislabs.com'), // Enable TLS for Redis Labs
+        rejectUnauthorized: false, // Allow self-signed certificates if needed
+        reconnectStrategy: (retries) => {
+          if (retries > 3) {
+            console.error('Redis connection failed after 3 retries');
+            return false; // Stop retrying
+          }
+          return Math.min(retries * 100, 3000); // Exponential backoff
+        },
+      },
+    });
 
-  redisClient.on('error', (err) => {
-    console.error('Redis Client Error:', err);
-  });
+    redisClient.on('error', (err) => {
+      console.error('Redis Client Error:', err);
+      // Reset client on error so it can reconnect
+      redisClient = null;
+    });
 
-  if (!redisClient.isOpen) {
-    await redisClient.connect();
+    if (!redisClient.isOpen) {
+      // Connect with timeout
+      await Promise.race([
+        redisClient.connect(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Redis connection timeout')), 5000)
+        ),
+      ]);
+    }
+
+    return redisClient;
+  } catch (error) {
+    console.error('Failed to connect to Redis:', error);
+    redisClient = null;
+    return null; // Return null instead of throwing - graceful fallback
   }
-
-  return redisClient;
 }
 
 // Cache TTLs (in seconds)
@@ -52,6 +85,10 @@ const CACHE_TTL = {
 export async function getCache<T>(key: string): Promise<T | null> {
   try {
     const client = await getRedisClient();
+    if (!client) {
+      // Redis not available, return null (cache miss)
+      return null;
+    }
     const value = await client.get(key);
     if (value === null) {
       return null;
@@ -64,7 +101,7 @@ export async function getCache<T>(key: string): Promise<T | null> {
     }
   } catch (error) {
     console.error(`Cache get error for key ${key}:`, error);
-    return null;
+    return null; // Graceful fallback - return null on error
   }
 }
 
@@ -74,6 +111,10 @@ export async function getCache<T>(key: string): Promise<T | null> {
 export async function setCache<T>(key: string, value: T, ttl: number): Promise<void> {
   try {
     const client = await getRedisClient();
+    if (!client) {
+      // Redis not available, silently skip caching
+      return;
+    }
     // Serialize value to JSON string
     const serialized = typeof value === 'string' ? value : JSON.stringify(value);
     await client.setEx(key, ttl, serialized);

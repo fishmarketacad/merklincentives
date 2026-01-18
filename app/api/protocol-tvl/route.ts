@@ -722,7 +722,25 @@ async function fetchProtocolTVL(protocolSlug: string, endTimestamp: number): Pro
  */
 export async function PUT(request: NextRequest) {
   try {
-    const body = await request.json();
+    // Check if request has body
+    const contentType = request.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      return NextResponse.json(
+        { error: 'Content-Type must be application/json' },
+        { status: 400 }
+      );
+    }
+
+    let body: any;
+    try {
+      body = await request.json();
+    } catch (error) {
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
     const { markets, startDate, endDate } = body;
 
     if (!markets || !Array.isArray(markets) || markets.length === 0) {
@@ -898,7 +916,25 @@ export async function PUT(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    // Check if request has body
+    const contentType = request.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      return NextResponse.json(
+        { error: 'Content-Type must be application/json' },
+        { status: 400 }
+      );
+    }
+
+    let body: any;
+    try {
+      body = await request.json();
+    } catch (error) {
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
     const { protocols, startDate, endDate } = body;
 
     if (!protocols || !Array.isArray(protocols) || protocols.length === 0) {

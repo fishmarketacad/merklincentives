@@ -247,7 +247,25 @@ function calculateTotalMONSpent(
 
 export async function POST(request: NextRequest) {
   try {
-    const body: QueryParams = await request.json();
+    // Check if request has body
+    const contentType = request.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      return NextResponse.json(
+        { error: 'Content-Type must be application/json' },
+        { status: 400 }
+      );
+    }
+
+    let body: QueryParams;
+    try {
+      body = await request.json();
+    } catch (error) {
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
     const { protocols, startDate, endDate, token = 'WMON' } = body;
 
     // Validate inputs
