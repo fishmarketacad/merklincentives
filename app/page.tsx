@@ -240,6 +240,58 @@ function HomeContent() {
     return ((current - previous) / previous) * 100;
   };
 
+  // Generate tooltip content from AI analysis for a given pool
+  const getAITooltip = (poolId: string, metricType: 'tvlCost' | 'tvlCostWoW' | 'volumeCost' | 'volumeCostWoW'): string | null => {
+    if (!aiAnalysis) return null;
+
+    const normalizedPoolId = poolId.toLowerCase();
+
+    // For TVL Cost: show efficiency issues
+    if (metricType === 'tvlCost' && aiAnalysis.efficiencyIssues) {
+      const issue = aiAnalysis.efficiencyIssues.find((issue: any) => 
+        issue.poolId.toLowerCase() === normalizedPoolId
+      );
+      if (issue) {
+        return `${issue.issue}\n\n💡 ${issue.recommendation}`;
+      }
+    }
+
+    // For WoW Changes: show explanations
+    if ((metricType === 'tvlCostWoW' || metricType === 'volumeCostWoW') && aiAnalysis.wowExplanations) {
+      const explanation = aiAnalysis.wowExplanations.find((exp: any) => 
+        exp.poolId.toLowerCase() === normalizedPoolId
+      );
+      if (explanation) {
+        let tooltip = explanation.explanation;
+        if (explanation.competitorLinks && explanation.competitorLinks.length > 0) {
+          tooltip += '\n\nCompeting pools:';
+          explanation.competitorLinks.forEach((competitor: any) => {
+            tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
+            if (competitor.reason) {
+              tooltip += ` (${competitor.reason})`;
+            }
+          });
+        }
+        return tooltip;
+      }
+    }
+
+    // For Volume Cost: check if there are volume-related insights in key findings
+    if (metricType === 'volumeCost' && aiAnalysis.keyFindings) {
+      // Look for volume-related findings that might mention this pool
+      const volumeFindings = aiAnalysis.keyFindings.filter((finding: string) => 
+        finding.toLowerCase().includes('volume') && 
+        (finding.toLowerCase().includes(poolId.split('-')[0].toLowerCase()) || 
+         finding.toLowerCase().includes(poolId.split('-')[1].toLowerCase()))
+      );
+      if (volumeFindings.length > 0) {
+        return volumeFindings.join('\n\n');
+      }
+    }
+
+    return null;
+  };
+
   const handleQuery = async () => {
     if (protocols.length === 0) {
       setError('Please select at least one protocol');
@@ -1411,12 +1463,44 @@ function HomeContent() {
                             <td className={`py-3 px-4 text-sm text-right font-medium ${
                               row.tvlCost && row.tvlCost > 50 ? 'text-red-400' : row.tvlCost && row.tvlCost > 20 ? 'text-yellow-400' : 'text-green-400'
                             }`}>
-                              {row.tvlCost !== null ? `${row.tvlCost.toFixed(2)}%` : '-'}
+                              {(() => {
+                                const poolId = `${row.platform.platformProtocol}-${row.funding.fundingProtocol}-${row.market.marketName}`;
+                                const tooltip = getAITooltip(poolId, 'tvlCost');
+                                const content = row.tvlCost !== null ? `${row.tvlCost.toFixed(2)}%` : '-';
+                                
+                                if (tooltip) {
+                                  return (
+                                    <span 
+                                      className="cursor-help underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400"
+                                      title={tooltip}
+                                    >
+                                      {content}
+                                    </span>
+                                  );
+                                }
+                                return content;
+                              })()}
                             </td>
                             <td className={`py-3 px-4 text-sm text-right font-medium ${
                               row.wowChange !== null && row.wowChange > 10 ? 'text-red-400' : row.wowChange !== null && row.wowChange < -10 ? 'text-green-400' : 'text-gray-400'
                             }`}>
-                              {row.wowChange !== null ? `${row.wowChange > 0 ? '+' : ''}${row.wowChange.toFixed(2)}%` : '-'}
+                              {(() => {
+                                const poolId = `${row.platform.platformProtocol}-${row.funding.fundingProtocol}-${row.market.marketName}`;
+                                const tooltip = getAITooltip(poolId, 'tvlCostWoW');
+                                const content = row.wowChange !== null ? `${row.wowChange > 0 ? '+' : ''}${row.wowChange.toFixed(2)}%` : '-';
+                                
+                                if (tooltip) {
+                                  return (
+                                    <span 
+                                      className="cursor-help underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400"
+                                      title={tooltip}
+                                    >
+                                      {content}
+                                    </span>
+                                  );
+                                }
+                                return content;
+                              })()}
                             </td>
                             <td className="py-3 px-4 text-sm text-right text-gray-300">
                               {row.volumeError ? (
@@ -1430,12 +1514,44 @@ function HomeContent() {
                             <td className={`py-3 px-4 text-sm text-right font-medium ${
                               row.volumeCost && row.volumeCost > 50 ? 'text-red-400' : row.volumeCost && row.volumeCost > 20 ? 'text-yellow-400' : row.volumeCost !== null ? 'text-green-400' : 'text-gray-400'
                             }`}>
-                              {row.volumeCost !== null ? `${row.volumeCost.toFixed(2)}%` : '-'}
+                              {(() => {
+                                const poolId = `${row.platform.platformProtocol}-${row.funding.fundingProtocol}-${row.market.marketName}`;
+                                const tooltip = getAITooltip(poolId, 'volumeCost');
+                                const content = row.volumeCost !== null ? `${row.volumeCost.toFixed(2)}%` : '-';
+                                
+                                if (tooltip) {
+                                  return (
+                                    <span 
+                                      className="cursor-help underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400"
+                                      title={tooltip}
+                                    >
+                                      {content}
+                                    </span>
+                                  );
+                                }
+                                return content;
+                              })()}
                             </td>
                             <td className={`py-3 px-4 text-sm text-right font-medium ${
                               row.volumeWowChange !== null && row.volumeWowChange > 10 ? 'text-red-400' : row.volumeWowChange !== null && row.volumeWowChange < -10 ? 'text-green-400' : 'text-gray-400'
                             }`}>
-                              {row.volumeWowChange !== null ? `${row.volumeWowChange > 0 ? '+' : ''}${row.volumeWowChange.toFixed(2)}%` : '-'}
+                              {(() => {
+                                const poolId = `${row.platform.platformProtocol}-${row.funding.fundingProtocol}-${row.market.marketName}`;
+                                const tooltip = getAITooltip(poolId, 'volumeCostWoW');
+                                const content = row.volumeWowChange !== null ? `${row.volumeWowChange > 0 ? '+' : ''}${row.volumeWowChange.toFixed(2)}%` : '-';
+                                
+                                if (tooltip) {
+                                  return (
+                                    <span 
+                                      className="cursor-help underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400"
+                                      title={tooltip}
+                                    >
+                                      {content}
+                                    </span>
+                                  );
+                                }
+                                return content;
+                              })()}
                             </td>
                           </tr>
                     ));
