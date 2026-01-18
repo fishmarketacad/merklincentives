@@ -232,10 +232,11 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
 ## Analysis Guidelines - CRITICAL RULES
 
 1. **Asset Class Comparison Only**: 
-   - ONLY compare pools with similar asset types (e.g., MON pools vs MON pools, BTC pools vs BTC pools, stablecoin pools vs stablecoin pools)
-   - NEVER compare different asset classes (e.g., MON pools vs BTC pools, LST pools vs stablecoin pools)
+   - ONLY compare pools with similar asset types (e.g., MON pools vs MON pools, BTC pools vs BTC pools, stablecoin pools vs stablecoin pools, commodity pools vs commodity pools)
+   - NEVER compare different asset classes (e.g., MON pools vs BTC pools, LST pools vs stablecoin pools, commodity pools vs stablecoin pools)
    - Different asset classes have different risk profiles and expected yields - comparing them is meaningless
-   - Group pools by asset type: MON-related, BTC-related, stablecoin-related, LST-related, etc.
+   - Group pools by asset type: MON-related, BTC-related, stablecoin-related, LST-related, commodity-related (gold/XAU), etc.
+   - **IMPORTANT**: Commodity pools (e.g., AUSD-XAUt0 where XAUt0 is gold) are NOT the same as stablecoin pools (e.g., AUSD-USDT0). Do NOT compare them.
 
 2. **Compare Similar Pools Within Asset Class**: 
    - Within the same asset class, pools with the same token pairs (e.g., MON-USDC, MON-AUSD) should have similar TVL Costs
