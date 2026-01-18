@@ -283,12 +283,18 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
     const tokenPair = pool.tokenPair.toLowerCase();
     const marketName = pool.marketName.toLowerCase();
     
-    if (tokenPair.includes('mon') || marketName.includes('mon')) {
+    // Check for gold/commodity tokens first (XAUt0, XAU, etc.) - these are NOT stablecoins
+    if (tokenPair.includes('xaut') || tokenPair.includes('xau') || marketName.includes('xaut') || marketName.includes('xau') || marketName.includes('gold')) {
+      assetType = 'commodity-related';
+    } else if (tokenPair.includes('mon') || marketName.includes('mon')) {
       assetType = 'mon-related';
     } else if (tokenPair.includes('btc') || tokenPair.includes('wbtc') || tokenPair.includes('lbtc') || marketName.includes('btc')) {
       assetType = 'btc-related';
     } else if (tokenPair.includes('ausd') || tokenPair.includes('usdc') || tokenPair.includes('usdt') || tokenPair.includes('3pool')) {
-      assetType = 'stablecoin-related';
+      // Only classify as stablecoin if NOT paired with gold/commodity tokens
+      // AUSD-XAUt0 should be commodity-related, not stablecoin-related
+      const hasCommodity = tokenPair.includes('xaut') || tokenPair.includes('xau') || marketName.includes('xaut') || marketName.includes('xau');
+      assetType = hasCommodity ? 'commodity-related' : 'stablecoin-related';
     } else if (tokenPair.includes('lst') || marketName.includes('lst') || tokenPair.includes('stmon') || tokenPair.includes('shmon')) {
       assetType = 'lst-related';
     }
