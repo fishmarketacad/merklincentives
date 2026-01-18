@@ -596,12 +596,15 @@ async function generateAnalysisPrompt(request: AnalysisRequest, allCampaigns?: a
    - If incentives stayed similar, identify SPECIFIC competitor pools from "Similar Pools Comparison" section:
      * Find pools with the SAME token pair (e.g., if analyzing MON-USDC, find other MON-USDC pools)
      * Compare their TVL Costs - if another pool has lower TVL Cost or higher incentives, it likely attracted TVL away
-     * Include competitorLinks array with Merkl URLs for each competing pool
+     * Include competitorLinks array with Merkl URLs and APR (from opportunities data) for each competing pool
      * Name the specific protocol, funding protocol, and market name
+     * Fetch APR from "Example Opportunities from Other Protocols" or "All Active Campaigns" sections - ALWAYS include APR if available
    - Reference "Example Opportunities from Other Protocols" to see if new competitors appeared or if similar pools exist elsewhere
+   - When listing competitor pools, ALWAYS include their APR if available from the opportunities data
    - Also check "All Active Campaigns" for additional context
-   - Do NOT just say "competitors" - be specific and include Merkl links in competitorLinks array
-   - Example format: "TVL Cost increased because competitor pool Uniswap MON-USDC (Upshift) has lower TVL Cost (45% vs 55%) and higher incentives. See example opportunities section for other MON-USDC pools on Monad."
+   - Do NOT say vague things like "only self listed in examples" - be specific about what competitors exist and why they're relevant
+   - Do NOT just say "competitors" - be specific and include Merkl links and APR in competitorLinks array
+   - Example format: "TVL Cost increased because competitor pool Uniswap MON-USDC (Upshift) has lower TVL Cost (45% vs 55%), higher incentives, and APR of 55.54%. See example opportunities section for other MON-USDC pools on Monad."
 
 4. **Recommendations**: Provide actionable recommendations to improve efficiency.
    - Focus on comparisons within the same asset type
@@ -629,7 +632,8 @@ Format your response as JSON with this structure:
           "protocol": "competitor protocol name",
           "marketName": "competitor market name",
           "merklUrl": "https://app.merkl.xyz/chains/monad?search=...",
-          "reason": "why this competitor is relevant (e.g., lower TVL Cost, higher incentives)"
+          "apr": 45.5,
+          "reason": "why this competitor is relevant (e.g., lower TVL Cost, higher incentives, higher APR)"
         }
       ]
     }
