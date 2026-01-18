@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getCachedMerklCampaigns, cacheMerklCampaigns } from '@/app/lib/cache';
+import { 
+  getCachedMerklCampaigns, 
+  cacheMerklCampaigns,
+  getCachedMerklCampaignDetails,
+  cacheMerklCampaignDetails,
+  getCachedMerklCampaignMetrics,
+  cacheMerklCampaignMetrics,
+  getCachedMerklOpportunity,
+  cacheMerklOpportunity
+} from '@/app/lib/cache';
 
 const MERKL_API_BASE = 'https://api.merkl.xyz';
 const MONAD_CHAIN_ID = 143;
@@ -113,39 +122,74 @@ async function fetchCampaigns(protocolId: string, endDate?: string): Promise<Cam
 }
 
 /**
- * Fetch campaign details
+ * Fetch campaign details (with caching)
  */
-async function fetchCampaignDetails(campaignId: string) {
+async function fetchCampaignDetails(campaignId: string, isHistorical: boolean = false) {
   try {
+    // Check cache first
+    const cached = await getCachedMerklCampaignDetails(campaignId);
+    if (cached) {
+      return cached;
+    }
+
+    // Cache miss - fetch from API
     const url = `${MERKL_API_BASE}/v4/campaigns/${campaignId}`;
     const response = await globalThis.fetch(url);
-    return await response.json();
+    const data = await response.json();
+    
+    // Cache the result
+    await cacheMerklCampaignDetails(campaignId, data, isHistorical);
+    
+    return data;
   } catch (error) {
     return null;
   }
 }
 
 /**
- * Fetch opportunity details
+ * Fetch opportunity details (with caching)
  */
-async function fetchOpportunity(opportunityId: string) {
+async function fetchOpportunity(opportunityId: string, isHistorical: boolean = false) {
   try {
+    // Check cache first
+    const cached = await getCachedMerklOpportunity(opportunityId);
+    if (cached) {
+      return cached;
+    }
+
+    // Cache miss - fetch from API
     const url = `${MERKL_API_BASE}/v4/opportunities/${opportunityId}`;
     const response = await globalThis.fetch(url);
-    return await response.json();
+    const data = await response.json();
+    
+    // Cache the result
+    await cacheMerklOpportunity(opportunityId, data, isHistorical);
+    
+    return data;
   } catch (error) {
     return null;
   }
 }
 
 /**
- * Fetch campaign metrics (returns full metrics object)
+ * Fetch campaign metrics (returns full metrics object) (with caching)
  */
-async function fetchCampaignMetrics(campaignId: string) {
+async function fetchCampaignMetrics(campaignId: string, isHistorical: boolean = false) {
   try {
+    // Check cache first
+    const cached = await getCachedMerklCampaignMetrics(campaignId);
+    if (cached) {
+      return cached;
+    }
+
+    // Cache miss - fetch from API
     const url = `${MERKL_API_BASE}/v4/campaigns/${campaignId}/metrics`;
     const response = await globalThis.fetch(url);
     const data = await response.json();
+    
+    // Cache the result
+    await cacheMerklCampaignMetrics(campaignId, data, isHistorical);
+    
     return data;
   } catch (error) {
     return { dailyRewardsRecords: [], aprRecords: [], tvlRecords: [] };
@@ -288,6 +332,9 @@ export async function POST(request: NextRequest) {
     const end = new Date(endDate + 'T23:59:59Z');
     const startTimestamp = Math.floor(start.getTime() / 1000);
     const endTimestamp = Math.floor(end.getTime() / 1000);
+    
+    // Determine if this is historical data (for caching)
+    const isHistorical = end.getTime() < Date.now() - 86400000; // More than 1 day ago
 
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
       return NextResponse.json(
@@ -354,8 +401,8 @@ export async function POST(request: NextRequest) {
       const campaignId = campaign.id || campaign.campaignId;
       if (!campaignId) continue;
 
-      // Get campaign details to determine funding protocol
-      const campaignDetails = await fetchCampaignDetails(String(campaignId));
+      // Get campaign details to determine funding protocol (cached)
+      const campaignDetails = await fetchCampaignDetails(String(campaignId), isHistorical);
       
       // Determine funding protocol (who paid for the campaign)
       let fundingProtocolId = 'unknown';
@@ -381,10 +428,10 @@ export async function POST(request: NextRequest) {
         // If we queried a specific protocol, that's the platform
         platformProtocolId = protocols[0];
         
-        // Still fetch opportunity for market name, APR, TVL, and URL
+        // Still fetch opportunity for market name, APR, TVL, and URL (cached)
         if (campaign.opportunityId) {
           try {
-            opportunityData = await fetchOpportunity(String(campaign.opportunityId));
+            opportunityData = await fetchOpportunity(String(campaign.opportunityId), isHistorical);
             marketName = opportunityData?.name || `Market ${campaign.opportunityId}`;
             marketAPR = opportunityData?.apr !== undefined ? parseFloat(String(opportunityData.apr)) : undefined;
             // Get TVL from opportunity as initial value (will be overridden by campaign metrics if available)
@@ -403,10 +450,10 @@ export async function POST(request: NextRequest) {
           }
         }
       } else {
-        // For "all" queries, determine from opportunity
+        // For "all" queries, determine from opportunity (cached)
         if (campaign.opportunityId) {
           try {
-            opportunityData = await fetchOpportunity(String(campaign.opportunityId));
+            opportunityData = await fetchOpportunity(String(campaign.opportunityId), isHistorical);
             platformProtocolId = opportunityData?.protocol?.id || fundingProtocolId;
             marketName = opportunityData?.name || `Market ${campaign.opportunityId}`;
             marketAPR = opportunityData?.apr !== undefined ? parseFloat(String(opportunityData.apr)) : undefined;
@@ -431,7 +478,7 @@ export async function POST(request: NextRequest) {
       }
 
       const rewardToken = campaignDetails?.rewardToken || campaign.rewardToken;
-      const metrics = await fetchCampaignMetrics(String(campaignId));
+      const metrics = await fetchCampaignMetrics(String(campaignId), isHistorical);
       const { totalMON } = calculateTotalMONSpent(
         metrics.dailyRewardsRecords || [],
         rewardToken,

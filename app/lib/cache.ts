@@ -183,6 +183,15 @@ export const CacheKeys = {
   
   duneVolume: (queryId: number, tokenPair: string | null) => 
     `dune:volume:${queryId}:${tokenPair || 'all'}`,
+  
+  merklCampaignDetails: (campaignId: string) => 
+    `merkl:campaign:details:${campaignId}`,
+  
+  merklCampaignMetrics: (campaignId: string) => 
+    `merkl:campaign:metrics:${campaignId}`,
+  
+  merklOpportunity: (opportunityId: string) => 
+    `merkl:opportunity:${opportunityId}`,
 };
 
 /**
@@ -278,5 +287,74 @@ export async function getCachedDuneVolume(
   tokenPair: string | null
 ): Promise<any | null> {
   const key = CacheKeys.duneVolume(queryId, tokenPair);
+  return await getCache<any>(key);
+}
+
+/**
+ * Cache Merkl campaign details
+ */
+export async function cacheMerklCampaignDetails(
+  campaignId: string,
+  details: any,
+  isHistorical: boolean = false
+): Promise<void> {
+  const key = CacheKeys.merklCampaignDetails(campaignId);
+  const ttl = isHistorical ? CACHE_TTL.MERKL_CAMPAIGNS_HISTORICAL : CACHE_TTL.MERKL_CAMPAIGNS;
+  await setCache(key, details, ttl);
+}
+
+/**
+ * Get cached Merkl campaign details
+ */
+export async function getCachedMerklCampaignDetails(
+  campaignId: string
+): Promise<any | null> {
+  const key = CacheKeys.merklCampaignDetails(campaignId);
+  return await getCache<any>(key);
+}
+
+/**
+ * Cache Merkl campaign metrics
+ */
+export async function cacheMerklCampaignMetrics(
+  campaignId: string,
+  metrics: any,
+  isHistorical: boolean = false
+): Promise<void> {
+  const key = CacheKeys.merklCampaignMetrics(campaignId);
+  const ttl = isHistorical ? CACHE_TTL.MERKL_CAMPAIGNS_HISTORICAL : CACHE_TTL.MERKL_CAMPAIGNS;
+  await setCache(key, metrics, ttl);
+}
+
+/**
+ * Get cached Merkl campaign metrics
+ */
+export async function getCachedMerklCampaignMetrics(
+  campaignId: string
+): Promise<any | null> {
+  const key = CacheKeys.merklCampaignMetrics(campaignId);
+  return await getCache<any>(key);
+}
+
+/**
+ * Cache Merkl opportunity
+ */
+export async function cacheMerklOpportunity(
+  opportunityId: string,
+  opportunity: any,
+  isHistorical: boolean = false
+): Promise<void> {
+  const key = CacheKeys.merklOpportunity(opportunityId);
+  const ttl = isHistorical ? CACHE_TTL.MERKL_OPPORTUNITIES : CACHE_TTL.MERKL_OPPORTUNITIES;
+  await setCache(key, opportunity, ttl);
+}
+
+/**
+ * Get cached Merkl opportunity
+ */
+export async function getCachedMerklOpportunity(
+  opportunityId: string
+): Promise<any | null> {
+  const key = CacheKeys.merklOpportunity(opportunityId);
   return await getCache<any>(key);
 }
