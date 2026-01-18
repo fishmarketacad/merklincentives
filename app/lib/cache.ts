@@ -25,24 +25,36 @@ async function getRedisClient() {
   }
 
   try {
-    // Redis Labs may require TLS - check if URL uses rediss:// or if we need to add TLS
+    // Redis Labs typically requires TLS - check if URL uses rediss://
     const isTLS = redisUrl.startsWith('rediss://');
-    const urlToUse = isTLS ? redisUrl : redisUrl.replace('redis://', 'rediss://');
+    const isRedisLabs = redisUrl.includes('redislabs.com');
     
+    // If it's Redis Labs but URL uses redis://, try rediss:// instead
+    const urlToUse = isRedisLabs && !isTLS 
+      ? redisUrl.replace('redis://', 'rediss://')
+      : redisUrl;
+    
+    const socketConfig: any = {
+      connectTimeout: 10000, // 10 second timeout for Redis Labs
+      reconnectStrategy: (retries: number) => {
+        if (retries > 3) {
+          console.error('Redis connection failed after 3 retries');
+          return false; // Stop retrying
+        }
+        return Math.min(retries * 100, 3000); // Exponential backoff
+      },
+    };
+
+    // Add TLS config if needed (Redis Labs requires TLS)
+    if (isTLS || isRedisLabs) {
+      socketConfig.tls = {
+        rejectUnauthorized: false, // Allow self-signed certificates if needed
+      };
+    }
+
     redisClient = createClient({
       url: urlToUse,
-      socket: {
-        connectTimeout: 10000, // 10 second timeout for Redis Labs
-        tls: isTLS || redisUrl.includes('redislabs.com'), // Enable TLS for Redis Labs
-        rejectUnauthorized: false, // Allow self-signed certificates if needed
-        reconnectStrategy: (retries) => {
-          if (retries > 3) {
-            console.error('Redis connection failed after 3 retries');
-            return false; // Stop retrying
-          }
-          return Math.min(retries * 100, 3000); // Exponential backoff
-        },
-      },
+      socket: socketConfig,
     });
 
     redisClient.on('error', (err) => {
