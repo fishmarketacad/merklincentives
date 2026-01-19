@@ -341,14 +341,18 @@ function HomeContent() {
         if (!exp.poolId) continue;
         const normalizedId = exp.poolId.toLowerCase();
         const tooltipText = buildTooltipText(exp, true);
+
+        // Skip if tooltip is empty
+        if (!tooltipText || tooltipText.trim().length === 0) continue;
+
         const poolIdParts = normalizedId.split('-');
-        
+
         // Store for TVL Cost metrics (WoW explanations are primarily for TVL Cost)
         // Only store volumeCostWoW if the explanation mentions volume/trading
-        const isVolumeRelated = tooltipText.toLowerCase().includes('volume') || 
+        const isVolumeRelated = tooltipText.toLowerCase().includes('volume') ||
                                 tooltipText.toLowerCase().includes('trading') ||
                                 tooltipText.toLowerCase().includes('volume cost');
-        
+
         if (!cache[normalizedId]) cache[normalizedId] = {};
         cache[normalizedId].tvlCostWoW = tooltipText;
         cache[normalizedId].tvlCost = tooltipText; // WoW explanations also help understand current TVL cost
@@ -398,6 +402,9 @@ function HomeContent() {
         const normalizedId = volExp.poolId.toLowerCase();
         const tooltipText = volExp.explanation || '';
 
+        // Skip if tooltip is empty
+        if (!tooltipText || tooltipText.trim().length === 0) continue;
+
         if (!cache[normalizedId]) cache[normalizedId] = {};
         cache[normalizedId].volumeCostWoW = tooltipText;
         cache[normalizedId].volumeCost = tooltipText; // Also use for Volume Cost column
@@ -433,6 +440,10 @@ function HomeContent() {
         if (!issue.poolId) continue;
         const normalizedId = issue.poolId.toLowerCase();
         const tooltipText = buildTooltipText(issue, false);
+
+        // Skip if tooltip is empty
+        if (!tooltipText || tooltipText.trim().length === 0) continue;
+
         if (!cache[normalizedId]) cache[normalizedId] = {};
         cache[normalizedId].tvlCost = tooltipText;
 
@@ -458,6 +469,9 @@ function HomeContent() {
             if (!wowAnalysis.poolName) continue;
             const poolNameLower = wowAnalysis.poolName.toLowerCase();
             const tooltipText = buildTooltipText(wowAnalysis, true);
+
+            // Skip if tooltip is empty
+            if (!tooltipText || tooltipText.trim().length === 0) continue;
 
             // Check if this is volume-related analysis
             const isVolumeRelated = tooltipText.toLowerCase().includes('volume') ||
@@ -510,19 +524,54 @@ function HomeContent() {
         }
       }
     }
-    
+
+    // Debug: Log cache size and sample entries
+    const cacheKeys = Object.keys(cache);
+    if (cacheKeys.length > 0) {
+      console.log(`[AI Tooltip Cache] Built cache with ${cacheKeys.length} pool entries`);
+      const sampleKey = cacheKeys[0];
+      console.log(`[AI Tooltip Cache] Sample entry "${sampleKey}":`, cache[sampleKey]);
+    } else {
+      console.warn('[AI Tooltip Cache] Cache is empty - no tooltips will be shown');
+    }
+
     return cache;
   }, [aiAnalysis]);
 
+  // Helper function to extract token pair + fee from market name
+  // Converts "Provide liquidity to UniswapV4 MON-USDC 0.05%" → "MON-USDC 0.05%"
+  const extractTokenPairFromMarketName = (marketName: string): string => {
+    // Match pattern like "MON-USDC 0.05%" or "AUSD-XAUt0 0.0009%"
+    const match = marketName.match(/([A-Z0-9a-z]+-[A-Z0-9a-z]+)\s*([\d.]+%)/i);
+    if (match) {
+      return `${match[1]} ${match[2]}`;
+    }
+    // Fallback: return the original name
+    return marketName;
+  };
+
   // Generate tooltip content from AI analysis for a given pool (now uses cache)
   const getAITooltip = (poolId: string, metricType: 'tvlCost' | 'tvlCostWoW' | 'volumeCost' | 'volumeCostWoW'): string | null => {
-    if (!aiAnalysis) return null;
+    if (!aiAnalysis) {
+      console.log(`[Tooltip] No AI analysis available for ${poolId} / ${metricType}`);
+      return null;
+    }
 
     const normalizedPoolId = poolId.toLowerCase();
-    
+
     // Try direct lookup first
-    if (aiTooltipCache[normalizedPoolId]?.[metricType]) {
-      return aiTooltipCache[normalizedPoolId][metricType];
+    const cachedTooltip = aiTooltipCache[normalizedPoolId]?.[metricType];
+    if (cachedTooltip && cachedTooltip.trim().length > 0) {
+      console.log(`[Tooltip] Found cached tooltip for ${poolId} / ${metricType}`);
+      return cachedTooltip;
+    }
+
+    // Debug: Log available cache keys if lookup fails
+    const cacheKeys = Object.keys(aiTooltipCache);
+    if (cacheKeys.length > 0) {
+      console.log(`[Tooltip] No cached tooltip for "${normalizedPoolId}" / ${metricType}. Available cache keys (first 5):`, cacheKeys.slice(0, 5));
+    } else {
+      console.warn(`[Tooltip] Cache is empty! aiAnalysis exists but cache is empty. aiAnalysis keys:`, Object.keys(aiAnalysis || {}));
     }
     
     // Fallback to flexible matching for protocol-level analysis
@@ -536,19 +585,22 @@ function HomeContent() {
       
       // Try flexible key (protocol-fundingProtocol-marketName)
       const flexibleKey = `${protocol}-${fundingProtocol}-${marketName}`;
-      if (aiTooltipCache[flexibleKey]?.[metricType]) {
-        return aiTooltipCache[flexibleKey][metricType];
+      const flexibleTooltip = aiTooltipCache[flexibleKey]?.[metricType];
+      if (flexibleTooltip && flexibleTooltip.trim().length > 0) {
+        return flexibleTooltip;
       }
-      
+
       // Try protocol-marketName (without funding protocol)
       const protocolMarketKey = `${protocol}-${marketName}`;
-      if (aiTooltipCache[protocolMarketKey]?.[metricType]) {
-        return aiTooltipCache[protocolMarketKey][metricType];
+      const protocolMarketTooltip = aiTooltipCache[protocolMarketKey]?.[metricType];
+      if (protocolMarketTooltip && protocolMarketTooltip.trim().length > 0) {
+        return protocolMarketTooltip;
       }
-      
+
       // Try matching by market name alone (for protocol-level analysis)
-      if (aiTooltipCache[marketNameLower]?.[metricType]) {
-        return aiTooltipCache[marketNameLower][metricType];
+      const marketTooltip = aiTooltipCache[marketNameLower]?.[metricType];
+      if (marketTooltip && marketTooltip.trim().length > 0) {
+        return marketTooltip;
       }
       
       // For TVL WoW metrics, check protocol-level poolLevelWowAnalysis with flexible matching
@@ -1379,6 +1431,10 @@ function HomeContent() {
 
       setAiAnalysis(data.analysis);
       setAiError(''); // Clear any previous errors on success
+      console.log('[AI Analysis] Analysis set successfully. Keys:', Object.keys(data.analysis || {}));
+      console.log('[AI Analysis] wowExplanations count:', data.analysis?.wowExplanations?.length || 0);
+      console.log('[AI Analysis] efficiencyIssues count:', data.analysis?.efficiencyIssues?.length || 0);
+      console.log('[AI Analysis] protocolRecommendations count:', data.analysis?.protocolRecommendations?.length || 0);
     } catch (err: any) {
       console.error('AI Analysis error:', err);
       let errorMsg = err.message || err.toString() || 'An error occurred during AI analysis';

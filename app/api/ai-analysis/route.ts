@@ -1,14 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { 
-  getCachedMerklCampaigns, 
-  cacheMerklCampaigns,
-  getCachedMerklOpportunities,
-  cacheMerklOpportunities 
-} from '@/app/lib/cache';
 
 // API Configuration - supports both Grok (xAI) and Claude (Anthropic)
 // Set AI_PROVIDER environment variable to 'grok' or 'claude' (defaults to 'claude')
-const AI_PROVIDER = (process.env.AI_PROVIDER || 'claude').toLowerCase();
+const AI_PROVIDER = (process.env.AI_PROVIDER || 'grok').toLowerCase();
 
 const XAI_API_KEY = process.env.XAI_API_KEY || process.env.GROK_API_KEY;
 const XAI_API_BASE = 'https://api.x.ai/v1';
@@ -79,7 +73,7 @@ interface AnalysisRequest {
 }
 
 /**
- * Fetch all campaigns on Monad chain (with caching)
+ * Fetch all campaigns on Monad chain
  */
 async function fetchAllCampaignsOnMonad(): Promise<any[]> {
   const campaigns: any[] = [];
@@ -88,20 +82,6 @@ async function fetchAllCampaignsOnMonad(): Promise<any[]> {
 
   while (hasMore) {
     try {
-      // Check cache first
-      const cached = await getCachedMerklCampaigns('all', page);
-      if (cached && cached.length > 0) {
-        console.log(`Cache hit for all campaigns page ${page}`);
-        campaigns.push(...cached);
-        if (cached.length < 100) {
-          hasMore = false;
-        } else {
-          page++;
-        }
-        continue;
-      }
-
-      // Cache miss - fetch from API
       const url = `${MERKL_API_BASE}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100`;
       const response = await globalThis.fetch(url);
       
@@ -126,8 +106,6 @@ async function fetchAllCampaignsOnMonad(): Promise<any[]> {
         hasMore = false;
       } else {
         campaigns.push(...pageCampaigns);
-        // Cache the fetched campaigns
-        await cacheMerklCampaigns('all', page, pageCampaigns);
         
         if (pageCampaigns.length < 100) {
           hasMore = false;
@@ -136,7 +114,7 @@ async function fetchAllCampaignsOnMonad(): Promise<any[]> {
         }
       }
 
-      // Rate limiting (only for API calls, not cached)
+      // Rate limiting
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
       console.error(`Error fetching campaigns page ${page}:`, error);
@@ -148,7 +126,7 @@ async function fetchAllCampaignsOnMonad(): Promise<any[]> {
 }
 
 /**
- * Fetch all opportunities on Monad chain (with caching)
+ * Fetch all opportunities on Monad chain
  */
 async function fetchAllOpportunitiesOnMonad(): Promise<any[]> {
   const opportunities: any[] = [];
@@ -157,20 +135,6 @@ async function fetchAllOpportunitiesOnMonad(): Promise<any[]> {
 
   while (hasMore) {
     try {
-      // Check cache first
-      const cached = await getCachedMerklOpportunities(page);
-      if (cached && cached.length > 0) {
-        console.log(`Cache hit for opportunities page ${page}`);
-        opportunities.push(...cached);
-        if (cached.length < 100) {
-          hasMore = false;
-        } else {
-          page++;
-        }
-        continue;
-      }
-
-      // Cache miss - fetch from API
       const url = `${MERKL_API_BASE}/v4/opportunities?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100&status=LIVE,PAST,SOON`;
       const response = await globalThis.fetch(url);
       
@@ -195,8 +159,6 @@ async function fetchAllOpportunitiesOnMonad(): Promise<any[]> {
         hasMore = false;
       } else {
         opportunities.push(...pageOpportunities);
-        // Cache the fetched opportunities
-        await cacheMerklOpportunities(page, pageOpportunities);
         
         if (pageOpportunities.length < 100) {
           hasMore = false;
@@ -205,7 +167,7 @@ async function fetchAllOpportunitiesOnMonad(): Promise<any[]> {
         }
       }
 
-      // Rate limiting (only for API calls, not cached)
+      // Rate limiting
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
       console.error(`Error fetching opportunities page ${page}:`, error);
@@ -969,10 +931,6 @@ async function addAnalysisGuidelines(mode: AnalysisMode, canPerformWowAnalysis: 
     
     section += `2. **Efficiency Assessment Using Expected Ranges**:\n`;
     section += `   - Compare each pool's TVL Cost against the expected range for its asset type (see table above)\n`;
-    section += `   - **FOR DEX POOLS WITH VOLUME DATA**: Prioritize Volume Cost analysis over TVL Cost\n`;
-    section += `     * Volume Cost 1-5%: Excellent efficiency (major pairs like USDC-USDT, WBTC-USDC)\n`;
-    section += `     * Volume Cost 5-10%: Good efficiency (standard pairs)\n`;
-    section += `     * Volume Cost >10%: Poor efficiency - spending too much per dollar of trading\n`;
     section += `   - Flag pools exceeding expected range by >30% as high priority issues\n`;
     section += `   - Within the same asset class, pools with the same token pairs should have similar TVL Costs\n`;
     section += `   - Flag when TVL Cost differs by >20% between pools with same token pair and asset type\n`;
@@ -1229,7 +1187,7 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
     section += `      "mechanicalChange": 9.1,\n`;
     section += `      "mechanicalExplanation": "Expected change from +6.7% incentives and -2.2% TVL: (1.067/0.978 - 1) ≈ +9.1%",\n`;
     section += `      "discrepancy": 6.4,\n`;
-    section += `      "explanation": "full explanation including mechanical math and any additional factors (FOR TVL COST)",\n`;
+    section += `      "explanation": "full explanation including mechanical math and any additional factors",\n`;
     section += `      "likelyCause": "competitor_pools|tvl_shift|new_pools|incentive_change|other",\n`;
     section += `      "confidence": "high|medium|low",\n`;
     section += `      "competitorLinks": [\n`;
@@ -1245,24 +1203,8 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
     section += `      ]\n`;
     section += `    }\n`;
     section += `  ],\n`;
-    section += `  "volumeCostWowExplanations": [\n`;
-    section += `    {\n`;
-    section += `      "poolId": "protocol-fundingProtocol-marketName",\n`;
-    section += `      "volumeCostChange": -17.48,\n`;
-    section += `      "volumeChange": 23.2,\n`;
-    section += `      "incentiveChange": 6.7,\n`;
-    section += `      "explanation": "Volume Cost decreased 17.48% due to volume increasing 23.2% faster than incentives (+6.7%). This indicates improved trading efficiency - more trading activity per dollar of incentive. Current volume: $104.75M (vs $85.03M prev week). Volume Cost improved from 3.54% to 2.87%, which is excellent for a major trading pair.",\n`;
-    section += `      "efficiency": "improving|stable|declining",\n`;
-    section += `      "significance": "high|medium|low"\n`;
-    section += `    }\n`;
-    section += `  ],\n`;
     section += `  "recommendations": ["recommendation1", "recommendation2", ...]\n`;
     section += `}\n`;
-    section += `\n**CRITICAL**: When volume data is available for a pool, you MUST include an entry in volumeCostWowExplanations array.\n`;
-    section += `- Explain volume cost changes in terms of trading activity, not just TVL\n`;
-    section += `- Compare volume growth/decline to incentive changes\n`;
-    section += `- Note if pool is attracting more/less trading activity\n`;
-    section += `- Flag if TVL is growing but volume is declining (inefficient farming)\n\n`;
   }
   
   section += `\n## Important Notes - CRITICAL REQUIREMENTS\n\n`;
@@ -1637,7 +1579,7 @@ IMPORTANT:
  * Supports: 'grok' or 'claude' (defaults to 'claude')
  */
 async function callAI(prompt: string, retries = 3): Promise<any> {
-  const provider = (process.env.AI_PROVIDER || 'claude').toLowerCase();
+  const provider = (process.env.AI_PROVIDER || 'grok').toLowerCase();
 
   console.log(`Using AI provider: ${provider}`);
 
