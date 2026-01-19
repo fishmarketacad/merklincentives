@@ -602,6 +602,26 @@ function HomeContent() {
       if (marketTooltip && marketTooltip.trim().length > 0) {
         return marketTooltip;
       }
+
+      // NEW: Extract token pair + fee from full market name and try matching shortened key
+      // This handles cases where AI returns "uniswap-upshift-mon-usdc-0.05%" but we lookup "uniswap-upshift-provide liquidity to uniswapv4 mon-usdc 0.05%"
+      const { tokenPair, fee } = extractTokenPairAndFee(marketNameLower);
+      if (tokenPair && fee) {
+        const shortenedKey = `${protocol}-${fundingProtocol}-${tokenPair}-${fee}%`;
+        const shortenedTooltip = aiTooltipCache[shortenedKey]?.[metricType];
+        if (shortenedTooltip && shortenedTooltip.trim().length > 0) {
+          console.log(`[Tooltip] Found tooltip using shortened key "${shortenedKey}" for ${poolId} / ${metricType}`);
+          return shortenedTooltip;
+        }
+        
+        // Also try without funding protocol
+        const shortenedProtocolKey = `${protocol}-${tokenPair}-${fee}%`;
+        const shortenedProtocolTooltip = aiTooltipCache[shortenedProtocolKey]?.[metricType];
+        if (shortenedProtocolTooltip && shortenedProtocolTooltip.trim().length > 0) {
+          console.log(`[Tooltip] Found tooltip using shortened protocol key "${shortenedProtocolKey}" for ${poolId} / ${metricType}`);
+          return shortenedProtocolTooltip;
+        }
+      }
       
       // For TVL WoW metrics, check protocol-level poolLevelWowAnalysis with flexible matching
       // Note: volumeCostWoW is handled separately below to ensure only volume-related content is shown
@@ -1221,12 +1241,19 @@ function HomeContent() {
     const periodDays = Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
     const currentPools = results.flatMap((platform) => {
-      const protocolKey = platform.platformProtocol.toLowerCase();
-      const dexVolume = protocolDEXVolume[protocolKey];
-      const volumeValue = dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
-
       return platform.fundingProtocols.flatMap((funding) =>
         funding.markets.map((market) => {
+          // Get per-market volume from Dune (preferred) or fallback to protocol-level volume
+          const marketKey = `${platform.platformProtocol}-${market.marketName}`;
+          const marketVolume = marketVolumes[marketKey];
+          const volumeValue = marketVolume?.volumeInRange ?? marketVolume?.volume7d ?? marketVolume?.volume30d ?? 
+            (() => {
+              // Fallback to protocol-level volume if per-market volume not available
+              const protocolKey = platform.platformProtocol.toLowerCase();
+              const dexVolume = protocolDEXVolume[protocolKey];
+              return dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
+            })();
+
           const prevMarket = findPreviousWeekMarket(
             platform.platformProtocol,
             funding.fundingProtocol,
@@ -1271,25 +1298,34 @@ function HomeContent() {
 
     const previousPools = previousWeekResults.length > 0
       ? previousWeekResults.flatMap((platform) => {
-          const protocolKey = platform.platformProtocol.toLowerCase();
-          const dexVolume = previousWeekProtocolDEXVolume[protocolKey];
-          const volumeValue = dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
-
           return platform.fundingProtocols.flatMap((funding) =>
-            funding.markets.map((market) => ({
-              protocol: platform.platformProtocol,
-              fundingProtocol: funding.fundingProtocol,
-              marketName: market.marketName,
-              tokenPair: '',
-              incentivesMON: market.totalMON,
-              incentivesUSD: !isNaN(monPriceNum) && monPriceNum > 0 ? market.totalMON * monPriceNum : null,
-              tvl: market.tvl || null,
-              volume: volumeValue,
-              apr: market.apr || null,
-              tvlCost: null, // Will be calculated on backend if needed
-              wowChange: null,
-              periodDays,
-            }))
+            funding.markets.map((market) => {
+              // Get per-market volume from Dune (preferred) or fallback to protocol-level volume
+              const marketKey = `${platform.platformProtocol}-${market.marketName}`;
+              const prevMarketVolume = previousWeekMarketVolumes[marketKey];
+              const volumeValue = prevMarketVolume?.volumeInRange ?? prevMarketVolume?.volume7d ?? prevMarketVolume?.volume30d ?? 
+                (() => {
+                  // Fallback to protocol-level volume if per-market volume not available
+                  const protocolKey = platform.platformProtocol.toLowerCase();
+                  const dexVolume = previousWeekProtocolDEXVolume[protocolKey];
+                  return dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
+                })();
+
+              return {
+                protocol: platform.platformProtocol,
+                fundingProtocol: funding.fundingProtocol,
+                marketName: market.marketName,
+                tokenPair: '',
+                incentivesMON: market.totalMON,
+                incentivesUSD: !isNaN(monPriceNum) && monPriceNum > 0 ? market.totalMON * monPriceNum : null,
+                tvl: market.tvl || null,
+                volume: volumeValue,
+                apr: market.apr || null,
+                tvlCost: null, // Will be calculated on backend if needed
+                wowChange: null,
+                periodDays,
+              };
+            })
           );
         })
       : null;

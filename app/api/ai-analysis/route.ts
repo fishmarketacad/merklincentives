@@ -347,7 +347,7 @@ async function generateUnifiedAnalysisPrompt(
   
   // Build prompt based on mode
   const taskDescription = mode === 'pool-level' 
-    ? 'analyzing DeFi incentive efficiency on Monad chain. Your goal is to identify areas for improvement and explain efficiency changes.'
+    ? 'an expert DeFi analyst conducting an institutional-grade efficiency review. Your analysis is objective, data-driven, and devoid of sensationalism. You explain the "why" behind the numbers using precise financial logic.'
     : 'an expert DeFi analyst providing protocol-level incentive efficiency recommendations to protocol teams.';
   
   const contextDescription = mode === 'pool-level'
@@ -1053,7 +1053,18 @@ async function addAnalysisGuidelines(mode: AnalysisMode, canPerformWowAnalysis: 
     section += `   **Analysis Requirements When Volume Data Exists**:\n`;
     section += `   - Include Volume Cost in your Key Findings section\n`;
     section += `   - Compare Volume Cost across pools (typical good range: 1-5% for major pairs, 5-15% for exotic pairs)\n`;
-    section += `   - **Create separate Volume Cost WoW explanations** for pools with volume data\n`;
+    section += `   - **CRITICAL: Create separate volumeCostWowExplanations array entries** for pools with volume data and Volume Cost WoW Change\n`;
+    section += `   - **For each pool with volume data**, populate volumeCostWowExplanations with:\n`;
+    section += `     * poolId: Same format as wowExplanations\n`;
+    section += `     * change: Volume Cost WoW Change percentage\n`;
+    section += `     * mechanicalChange: Expected change based on volume and incentive changes\n`;
+    section += `     * mechanicalExplanation: Formula explanation for Volume Cost (not TVL Cost)\n`;
+    section += `     * discrepancy: Difference between actual and expected Volume Cost change\n`;
+    section += `     * explanation: Detailed analysis explaining Volume Cost changes using VOLUME amounts (not TVL), trading activity, and efficiency implications. Use professional, objective language.\n`;
+    section += `     * likelyCause: volume_growth|volume_decline|incentive_change|other\n`;
+    section += `     * confidence: high|medium|low\n`;
+    section += `     * competitorLinks: Array (usually empty for volume changes unless competitor volume data available)\n`;
+    section += `   - **IMPORTANT**: Volume Cost explanations must focus on VOLUME and TRADING ACTIVITY, not TVL. Use dollar amounts for volume (e.g., "$37.7M volume" not "$3.96M TVL").\n`;
     section += `   - If Volume Cost WoW Change differs from TVL Cost WoW Change (>10% difference), explain why:\n`;
     section += `     * Volume increased faster than TVL → Volume Cost decreased (good efficiency - more trading per dollar of TVL)\n`;
     section += `     * Volume decreased faster than TVL → Volume Cost increased (worse efficiency - farming without trading)\n`;
@@ -1087,6 +1098,13 @@ async function addAnalysisGuidelines(mode: AnalysisMode, canPerformWowAnalysis: 
   section += `3. If competitor APR is significantly higher (>30%), include it in competitorLinks\n`;
   section += `4. Include data quality warnings if APR differs by >30% (may indicate small pool size)\n\n`;
   section += `**DO NOT** leave competitorLinks empty if competitors exist in "Example Opportunities" section. You MUST cite specific competitor pools.\n`;
+  
+  section += `\n6. **Writing Style & Tone Guidelines - CRITICAL**:\n`;
+  section += `   - **Tone**: Institutional, professional, and objective. Write like a senior DeFi analyst at a major firm.\n`;
+  section += `   - **Avoid Hyperbole**: DO NOT use dramatic words like "catastrophic", "plunge", "shines", "evaporation", "boom", or "crisis".\n`;
+  section += `   - **Use Neutral Terminology**: Instead of "plunge", use "significant decrease". Instead of "shines", use "demonstrates high efficiency".\n`;
+  section += `   - **Precision**: Use absolute numbers to contextualize percentages. (e.g., "TVL decreased by 20% (-$990K) from $4.95M to $3.96M").\n`;
+  section += `   - **Causal Analysis**: Focus on *cause and effect*. Connect the incentive change to the TVL behavior logically. (e.g., "Despite the high APR, capital outflow continued, suggesting the incentives are attracting mercenary capital rather than sticky liquidity.")\n`;
   
   return section;
 }
@@ -1170,37 +1188,40 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
     section += `  "efficiencyIssues": [\n`;
     section += `    {\n`;
     section += `      "poolId": "protocol-fundingProtocol-marketName",\n`;
-    section += `      "assetType": "stablecoin|stablecoin-derivative|mon-related|btc-related|lst-related|commodity-related|other",\n`;
-    section += `      "tvlCost": 14.03,\n`;
-    section += `      "expectedRange": [8, 18],\n`;
-    section += `      "status": "within_range|above_range|critical",\n`;
-    section += `      "issue": "description of issue",\n`;
-    section += `      "severity": "high|medium|low",\n`;
-    section += `      "recommendation": "specific recommendation",\n`;
-    section += `      "analysisConfidence": "high|medium|low"\n`;
+    section += `      "assetType": "mon-related",\n`;
+    section += `      "tvlCost": 75.88,\n`;
+    section += `      "expectedRange": [20, 60],\n`;
+    section += `      "status": "above_range",\n`;
+    section += `      "issue": "TVL Cost 26.5% above expected range maximum despite being L1-native token pair. TVL dropped 20% ($990K loss) from $4.95M to $3.96M while incentives remained stable (-0.4%), indicating poor TVL retention. Despite a high 73.39% APR, the pool failed to retain capital, suggesting structural issues or competitive pressure.",\n`;
+    section += `      "severity": "high",\n`;
+    section += `      "recommendation": "Reduce incentives by 20-25% to align TVL Cost closer to 60% upper bound. Investigate TVL migration to competitor MON pairs. Current 73.39% APR appears insufficient to retain TVL, indicating either inefficient incentive allocation or external competitive pressure.",\n`;
+    section += `      "analysisConfidence": "high"\n`;
     section += `    }\n`;
     section += `  ],\n`;
     section += `  "wowExplanations": [\n`;
     section += `    {\n`;
     section += `      "poolId": "protocol-fundingProtocol-marketName",\n`;
-    section += `      "change": 15.5,\n`;
-    section += `      "mechanicalChange": 9.1,\n`;
-    section += `      "mechanicalExplanation": "Expected change from +6.7% incentives and -2.2% TVL: (1.067/0.978 - 1) ≈ +9.1%",\n`;
-    section += `      "discrepancy": 6.4,\n`;
-    section += `      "explanation": "full explanation including mechanical math and any additional factors",\n`;
-    section += `      "likelyCause": "competitor_pools|tvl_shift|new_pools|incentive_change|other",\n`;
-    section += `      "confidence": "high|medium|low",\n`;
-    section += `      "competitorLinks": [\n`;
-    section += `        {\n`;
-    section += `          "protocol": "competitor protocol name",\n`;
-    section += `          "marketName": "competitor market name",\n`;
-    section += `          "merklUrl": "https://app.merkl.xyz/chains/monad?search=...",\n`;
-    section += `          "apr": 45.5,\n`;
-    section += `          "tvlCost": 12.3,\n`;
-    section += `          "incentives": 350000,\n`;
-    section += `          "reason": "why this competitor is relevant (e.g., lower TVL Cost, higher incentives, higher APR). Include data quality warnings if APR differs by >30%."\n`;
-    section += `        }\n`;
-    section += `      ]\n`;
+    section += `      "change": 24.69,\n`;
+    section += `      "mechanicalChange": 24.4,\n`;
+    section += `      "mechanicalExplanation": "Expected change from -0.4% incentives and -20% TVL: (0.996/0.80 - 1) ≈ +24.5%.",\n`;
+    section += `      "discrepancy": 0.29,\n`;
+    section += `      "explanation": "TVL Cost increased 24.69% due to significant TVL decrease ($4.95M to $3.96M, -20%) while incentives remained stable (-0.4%). Mechanical expected change of +24.4% matches actual change within 0.3%, indicating internal inefficiency rather than external competitor pressure. The $990K TVL outflow occurred despite 73.39% APR, suggesting capital migration driven by structural factors or superior opportunities elsewhere.",\n`;
+    section += `      "likelyCause": "tvl_shift",\n`;
+    section += `      "confidence": "high",\n`;
+    section += `      "competitorLinks": []\n`;
+    section += `    }\n`;
+    section += `  ],\n`;
+    section += `  "volumeCostWowExplanations": [\n`;
+    section += `    {\n`;
+    section += `      "poolId": "protocol-fundingProtocol-marketName",\n`;
+    section += `      "change": -20.16,\n`;
+    section += `      "mechanicalChange": -18.2,\n`;
+    section += `      "mechanicalExplanation": "Expected Volume Cost change from +22% volume growth and stable incentives: (1.0/1.22 - 1) ≈ -18.0%.",\n`;
+    section += `      "discrepancy": -2.16,\n`;
+    section += `      "explanation": "Volume Cost decreased 20.16% due to volume growth ($30.9M to $37.7M, +22%) while incentives remained stable. Trading activity increased, improving efficiency. The mechanical expected decrease of -18.2% closely matches the actual -20.16% change, indicating volume-driven efficiency gains rather than incentive changes.",\n`;
+    section += `      "likelyCause": "volume_growth",\n`;
+    section += `      "confidence": "high",\n`;
+    section += `      "competitorLinks": []\n`;
     section += `    }\n`;
     section += `  ],\n`;
     section += `  "recommendations": ["recommendation1", "recommendation2", ...]\n`;
@@ -1430,7 +1451,7 @@ async function callGrokAI(prompt: string): Promise<any> {
       input: [
         {
           role: 'system',
-          content: 'You are an expert DeFi analyst specializing in incentive efficiency analysis. CRITICAL: You MUST respond with valid, parseable JSON only. Do not include any markdown formatting, code blocks, or explanatory text outside the JSON. The response must be pure JSON that can be parsed directly.',
+          content: 'You are an expert DeFi analyst. Your writing style is professional, clinical, and precise. You avoid flowery, dramatic, or sensationalist language. You explain trends using specific dollar amounts and clear causal reasoning. CRITICAL: You MUST respond with valid, parseable JSON only. Do not include any markdown formatting, code blocks, or explanatory text outside the JSON. The response must be pure JSON that can be parsed directly.',
         },
         {
           role: 'user',
