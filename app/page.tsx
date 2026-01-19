@@ -58,6 +58,64 @@ interface MarketVolumes {
   [marketKey: string]: MarketVolume; // marketKey format: "protocol-marketName"
 }
 
+interface DashboardCache {
+  endDate: string; // Used to validate if cache is still valid
+  startDate: string;
+  monPrice: string;
+  protocols: string[];
+  results: QueryResult[];
+  previousWeekResults: QueryResult[];
+  protocolTVL: ProtocolTVL;
+  protocolTVLMetadata: ProtocolTVLMetadata;
+  protocolDEXVolume: ProtocolDEXVolume;
+  marketVolumes: MarketVolumes;
+  previousWeekProtocolTVL: ProtocolTVL;
+  previousWeekProtocolDEXVolume: ProtocolDEXVolume;
+  previousWeekMarketVolumes: MarketVolumes;
+  aiAnalysis: any | null;
+  timestamp: number;
+}
+
+// Date utility functions for auto-refresh
+const getYesterdayUTC = (): string => {
+  const yesterday = new Date();
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  return yesterday.toISOString().split('T')[0];
+};
+
+const getSevenDaysAgoUTC = (): string => {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 8); // 8 days ago to get 7 days before yesterday
+  return sevenDaysAgo.toISOString().split('T')[0];
+};
+
+// Cache management functions
+const saveDashboardCache = (cache: DashboardCache): void => {
+  try {
+    localStorage.setItem('dashboardCache', JSON.stringify(cache));
+  } catch (err) {
+    console.warn('Failed to save dashboard cache:', err);
+  }
+};
+
+const loadDashboardCache = (): DashboardCache | null => {
+  try {
+    const cached = localStorage.getItem('dashboardCache');
+    if (!cached) return null;
+    return JSON.parse(cached) as DashboardCache;
+  } catch (err) {
+    console.warn('Failed to load dashboard cache:', err);
+    return null;
+  }
+};
+
+const isCacheValid = (cache: DashboardCache | null): boolean => {
+  if (!cache) return false;
+  const yesterday = getYesterdayUTC();
+  // Cache is valid if the endDate matches yesterday (i.e., same data as today's default)
+  return cache.endDate === yesterday;
+};
+
 function HomeContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -84,7 +142,8 @@ function HomeContent() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' | null }>({ key: null, direction: null });
-  
+  const [isAutoLoading, setIsAutoLoading] = useState(false);
+
   // Memoized computed values
   const periodDays = useMemo(() => {
     if (!startDate || !endDate) return 0;
@@ -123,44 +182,165 @@ function HomeContent() {
       }
     });
   };
-  
-  // Read URL parameters on mount
+
+  // Fetch MON price from API
+  const fetchMonPrice = async (): Promise<string> => {
+    try {
+      const response = await fetch('/api/mon-price');
+      if (!response.ok) {
+        return '0.025';
+      }
+      const data = await response.json();
+      return data.price?.toString() || '0.025';
+    } catch {
+      return '0.025';
+    }
+  };
+
+  // Read URL parameters on mount and handle auto-initialization
   useEffect(() => {
-    const urlProtocols = searchParams.get('protocols');
-    const urlStartDate = searchParams.get('startDate');
-    const urlEndDate = searchParams.get('endDate');
-    const urlMonPrice = searchParams.get('monPrice');
-    
-    if (urlProtocols) {
-      setProtocols(urlProtocols.split(',').filter(p => p));
-    }
-    if (urlStartDate) {
-      setStartDate(urlStartDate);
-    }
-    if (urlEndDate) {
-      setEndDate(urlEndDate);
-    }
-    if (urlMonPrice) {
-      setMonPrice(urlMonPrice);
-    } else {
-      // Set default MON price
-      setMonPrice('0.025');
-    }
-    setIsInitialized(true);
+    const initializeDashboard = async () => {
+      const urlProtocols = searchParams.get('protocols');
+      const urlStartDate = searchParams.get('startDate');
+      const urlEndDate = searchParams.get('endDate');
+      const urlMonPrice = searchParams.get('monPrice');
+
+      // Check if URL params exist (manual override)
+      const hasURLParams = urlProtocols || urlStartDate || urlEndDate || urlMonPrice;
+
+      if (hasURLParams) {
+        // Manual override: use URL parameters
+        if (urlProtocols) {
+          setProtocols(urlProtocols.split(',').filter(p => p));
+        }
+        if (urlStartDate) {
+          setStartDate(urlStartDate);
+        }
+        if (urlEndDate) {
+          setEndDate(urlEndDate);
+        }
+        if (urlMonPrice) {
+          setMonPrice(urlMonPrice);
+        } else {
+          setMonPrice('0.025');
+        }
+      } else {
+        // No URL params: check cache first for instant display
+        const yesterday = getYesterdayUTC();
+        const sevenDaysAgo = getSevenDaysAgoUTC();
+        const cache = loadDashboardCache();
+
+        if (isCacheValid(cache)) {
+          // Use cached data - instant display, no loading!
+          setStartDate(cache!.startDate);
+          setEndDate(cache!.endDate);
+          setProtocols(cache!.protocols);
+          setMonPrice(cache!.monPrice);
+          setResults(cache!.results);
+          setPreviousWeekResults(cache!.previousWeekResults);
+          setProtocolTVL(cache!.protocolTVL);
+          setProtocolTVLMetadata(cache!.protocolTVLMetadata);
+          setProtocolDEXVolume(cache!.protocolDEXVolume);
+          setMarketVolumes(cache!.marketVolumes);
+          setPreviousWeekProtocolTVL(cache!.previousWeekProtocolTVL);
+          setPreviousWeekProtocolDEXVolume(cache!.previousWeekProtocolDEXVolume);
+          setPreviousWeekMarketVolumes(cache!.previousWeekMarketVolumes);
+          setAiAnalysis(cache!.aiAnalysis);
+        } else {
+          // No valid cache: fetch fresh data
+          setStartDate(sevenDaysAgo);
+          setEndDate(yesterday);
+          setProtocols(commonProtocols); // Select all protocols
+
+          // Fetch MON price from API
+          const price = await fetchMonPrice();
+          setMonPrice(price);
+
+          // Auto-run query to fetch fresh data
+          setIsAutoLoading(true);
+          // Note: handleQuery will be called after state is set
+          // We'll trigger it in a separate useEffect that watches for isAutoLoading
+        }
+      }
+
+      setIsInitialized(true);
+    };
+
+    initializeDashboard();
   }, [searchParams]);
   
   // Update URL parameters when state changes (but not during initialization)
   useEffect(() => {
     if (!isInitialized) return;
-    
+
+    // Check if current state matches default dashboard params
+    const yesterday = getYesterdayUTC();
+    const sevenDaysAgo = getSevenDaysAgoUTC();
+    const isDefaultParams =
+      startDate === sevenDaysAgo &&
+      endDate === yesterday &&
+      protocols.length === commonProtocols.length &&
+      protocols.every(p => commonProtocols.includes(p));
+
+    // Don't update URL for default dashboard view
+    if (isDefaultParams) {
+      const currentURL = window.location.search;
+      if (currentURL !== '') {
+        router.replace('/', { scroll: false });
+      }
+      return;
+    }
+
+    // Update URL for non-default params
     const newURL = urlParams ? `?${urlParams}` : '';
-    
-    // Only update URL if it's different from current URL to prevent loops
     const currentURL = window.location.search;
     if (currentURL !== newURL) {
       router.replace(newURL, { scroll: false });
     }
-  }, [urlParams, isInitialized, router]);
+  }, [urlParams, isInitialized, router, startDate, endDate, protocols]);
+
+  // Auto-run query when isAutoLoading is true
+  useEffect(() => {
+    if (isAutoLoading && isInitialized && protocols.length > 0 && startDate && endDate) {
+      handleQuery(true);
+    }
+  }, [isAutoLoading, isInitialized, protocols.length, startDate, endDate]);
+
+  // Save dashboard cache after data is loaded (when results and AI analysis are set)
+  useEffect(() => {
+    // Only save cache if we have results and we're using default dashboard params
+    if (results.length === 0) return;
+
+    const yesterday = getYesterdayUTC();
+    const sevenDaysAgo = getSevenDaysAgoUTC();
+    const isDefaultParams =
+      startDate === sevenDaysAgo &&
+      endDate === yesterday &&
+      protocols.length === commonProtocols.length &&
+      protocols.every(p => commonProtocols.includes(p));
+
+    if (isDefaultParams) {
+      // Save to cache
+      const cache: DashboardCache = {
+        endDate,
+        startDate,
+        monPrice,
+        protocols,
+        results,
+        previousWeekResults,
+        protocolTVL,
+        protocolTVLMetadata,
+        protocolDEXVolume,
+        marketVolumes,
+        previousWeekProtocolTVL,
+        previousWeekProtocolDEXVolume,
+        previousWeekMarketVolumes,
+        aiAnalysis,
+        timestamp: Date.now(),
+      };
+      saveDashboardCache(cache);
+    }
+  }, [results, aiAnalysis, startDate, endDate, protocols, monPrice]);
 
   const commonProtocols = [
     'clober',
@@ -720,14 +900,16 @@ function HomeContent() {
     return null;
   };
 
-  const handleQuery = async () => {
+  const handleQuery = async (autoRun = false) => {
     if (protocols.length === 0) {
       setError('Please select at least one protocol');
+      if (autoRun) setIsAutoLoading(false);
       return;
     }
 
     if (!startDate || !endDate) {
       setError('Please select both start and end dates');
+      if (autoRun) setIsAutoLoading(false);
       return;
     }
 
@@ -740,6 +922,8 @@ function HomeContent() {
     setPreviousWeekMarketVolumes({});
     setAiAnalysis(null); // Clear previous AI analysis when querying new parameters
     setAiError('');
+
+    let querySucceeded = false;
 
     try {
       // Calculate previous week dates
@@ -949,10 +1133,25 @@ function HomeContent() {
         console.warn('Failed to fetch per-market volumes:', marketVolumeErr);
         // Continue without per-market volumes
       }
+
+      // Mark query as succeeded
+      querySucceeded = true;
     } catch (err: any) {
       setError(err.message || 'An error occurred');
+      if (autoRun) setIsAutoLoading(false);
     } finally {
       setLoading(false);
+
+      // If this was an auto-run query and it succeeded, trigger AI analysis
+      if (autoRun && querySucceeded) {
+        setIsAutoLoading(false);
+        // Add a small delay to ensure results state is updated
+        setTimeout(() => {
+          handleAIAnalysis(true).catch((err) => {
+            console.error('Auto AI analysis failed:', err);
+          });
+        }, 100);
+      }
     }
   };
 
@@ -1430,8 +1629,9 @@ function HomeContent() {
   };
 
   // Handle AI analysis
-  const handleAIAnalysis = async () => {
-    if (results.length === 0) {
+  const handleAIAnalysis = async (autoRun = false) => {
+    // Skip the results check if this is an auto-run (results state might not be updated yet)
+    if (!autoRun && results.length === 0) {
       setAiError('Please query data first before running AI analysis');
       return;
     }
@@ -1505,6 +1705,17 @@ function HomeContent() {
             Query MON incentives spent across protocols on Monad
           </p>
         </div>
+
+        {/* Auto-Loading Indicator */}
+        {isAutoLoading && (
+          <div className="mb-4 p-4 bg-purple-900/30 border-2 border-purple-500/50 rounded-lg flex items-center gap-3 animate-pulse">
+            <svg className="animate-spin h-5 w-5 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span className="text-purple-300 font-semibold">Auto-loading dashboard...</span>
+          </div>
+        )}
 
         <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-700/50 p-6 mb-4">
           {/* Date Range and MON Price - Single Row */}
@@ -1591,7 +1802,7 @@ function HomeContent() {
           {/* Query and Analyze Buttons */}
           <div className="grid grid-cols-2 gap-4">
             <button
-              onClick={handleQuery}
+              onClick={() => handleQuery()}
               disabled={loading || analyzing}
               className="bg-gradient-to-r from-purple-600 to-purple-700 text-white py-3 px-6 rounded-lg font-semibold text-lg hover:from-purple-500 hover:to-purple-600 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-purple-500/50 transform hover:scale-[1.02] active:scale-[0.98]"
             >
@@ -1652,7 +1863,7 @@ function HomeContent() {
               </div>
               <div className="flex gap-3">
                 <button
-                  onClick={handleAIAnalysis}
+                  onClick={() => handleAIAnalysis()}
                   disabled={aiLoading || results.length === 0}
                   className="px-5 py-2.5 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-500 transition-all shadow-lg hover:shadow-purple-500/50 transform hover:scale-105 active:scale-95 flex items-center gap-2 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -1694,7 +1905,7 @@ function HomeContent() {
 
             {/* AI Analysis Results */}
             {aiAnalysis && (
-              <details className="mb-6 bg-purple-900/20 border-2 border-purple-500/50 rounded-lg p-6" open>
+              <details className="mb-6 bg-purple-900/20 border-2 border-purple-500/50 rounded-lg p-6">
                 <summary className="cursor-pointer list-none">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-xl font-bold text-white flex items-center gap-2">

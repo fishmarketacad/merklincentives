@@ -1257,13 +1257,28 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
   section += `- If expected +10% but actual +25% → TVL Cost increased MORE than expected (external factors like competitors)\n`;
   section += `- Always ask: "Where did the TVL go?" if TVL dropped significantly\n\n`;
   
-  section += `**6. General Requirements**:\n`;
+  section += `**6. Analysis Depth Requirements**:\n`;
+  section += `- **keyFindings**: Provide 5-8 high-level findings that summarize the most important trends\n`;
+  section += `- **efficiencyIssues**: Identify 10-15 pools with the most significant efficiency issues\n`;
+  section += `  * Prioritize by severity: critical > high > medium > low\n`;
+  section += `  * Include pools above expected range AND pools significantly below (potential under-incentivization)\n`;
+  section += `  * Skip pools that are perfectly within range with no notable issues\n`;
+  section += `- **wowExplanations**: Analyze 15-20 pools with the most significant WoW changes\n`;
+  section += `  * Prioritize: |change| > 50%, then |change| > 30%, then |change| > 15%\n`;
+  section += `  * SKIP pools with -5% < change < +5% (neutral/boring changes)\n`;
+  section += `  * Focus on pools where something interesting happened (large changes, unexpected discrepancies)\n`;
+  section += `- **volumeCostWowExplanations**: Analyze 10-15 DEX pools with significant volume changes\n`;
+  section += `  * Prioritize: |volume change| > 40%, then |volume change| > 25%\n`;
+  section += `  * SKIP pools with -10% < volume change < +10%\n`;
+  section += `- **recommendations**: Provide 5-8 actionable recommendations based on findings\n\n`;
+
+  section += `**7. General Requirements**:\n`;
   section += `- Be specific with numbers (incentive amounts, TVL Cost percentages, change amounts)\n`;
   section += `- Prioritize recommendations by impact (critical issues first)\n`;
   section += `- Consider both efficiency (TVL Cost) and effectiveness (TVL growth)\n`;
   section += `- Provide actionable guidance, not just observations\n`;
   section += `- Include confidence levels for each analysis (high/medium/low)\n`;
-  
+
   return section;
 }
 
