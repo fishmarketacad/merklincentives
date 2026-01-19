@@ -6,10 +6,45 @@ import {
   cacheMerklOpportunities 
 } from '@/app/lib/cache';
 
+// API Configuration - supports both Grok (xAI) and Claude (Anthropic)
+// Set AI_PROVIDER environment variable to 'grok' or 'claude' (defaults to 'claude')
+const AI_PROVIDER = (process.env.AI_PROVIDER || 'claude').toLowerCase();
+
 const XAI_API_KEY = process.env.XAI_API_KEY || process.env.GROK_API_KEY;
 const XAI_API_BASE = 'https://api.x.ai/v1';
+
+const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY;
+const CLAUDE_API_BASE = 'https://api.anthropic.com/v1';
+
 const MERKL_API_BASE = 'https://api.merkl.xyz';
 const MONAD_CHAIN_ID = 143;
+
+// Compiled regex patterns (compile once, reuse many times)
+const TOKEN_PAIR_REGEX = /([A-Z0-9]+)-([A-Z0-9]+)/;
+const TOKEN_PAIR_REGEX_CASE_INSENSITIVE = /([a-z0-9]+)[-\/]([a-z0-9]+)/i;
+
+// Configuration constants
+const ANALYSIS_CONFIG = {
+  thresholds: {
+    highDiscrepancy: 15,      // % difference between expected and actual change
+    mediumDiscrepancy: 5,     // % difference for medium confidence
+    criticalSeverity: 30,     // % over expected range for critical issues
+    highSeverity: 20,         // % over expected range for high issues
+    wowChangeThreshold: 20,   // % WoW change to trigger explanation
+  },
+  assetTypes: {
+    stablecoin: { range: [5, 15], definition: 'Both tokens are stablecoins (USDC/USDT/DAI/AUSD)' },
+    'stablecoin-derivative': { range: [8, 18], definition: 'Stablecoin + yield-bearing stablecoin (AUSD-earnAUSD, USDC-sUSDC)' },
+    'mon-related': { range: [20, 60], definition: 'Contains MON token (MON-USDC, MON-AUSD, MON-wBTC) - L1-native token pairs' },
+    'btc-related': { range: [10, 25], definition: 'Contains BTC (wBTC-USDC, wBTC-AUSD)' },
+    'lst-related': { range: [8, 20], definition: 'Contains liquid staking tokens (stETH-ETH, rETH-USDC)' },
+    commodity: { range: [10, 25], definition: 'Tokenized commodities (XAUt0-AUSD for gold)' },
+  },
+  models: {
+    claude: 'claude-sonnet-4-5',
+    grok: 'grok-4-1-fast-reasoning',
+  },
+};
 
 interface PoolData {
   protocol: string;
@@ -187,7 +222,8 @@ async function fetchAllOpportunitiesOnMonad(): Promise<any[]> {
  */
 function extractTokenPair(marketName: string): string {
   // Try to find pattern like "MON-USDC", "WBTC-WMON", etc.
-  const match = marketName.match(/([A-Z0-9]+)-([A-Z0-9]+)/);
+  // Uses pre-compiled regex for better performance
+  const match = marketName.match(TOKEN_PAIR_REGEX);
   if (match) {
     return `${match[1]}-${match[2]}`;
   }
@@ -328,9 +364,22 @@ async function generateUnifiedAnalysisPrompt(
   const canPerformWowAnalysis = hasPreviousWeek && poolsWithPreviousData > 0;
   
   // Count campaigns with useful data
+  // Try to extract protocol ID from campaign or opportunity data
   const campaignsWithData = allCampaigns ? allCampaigns.filter(c => {
-    const protocolId = c.mainProtocolId || c.protocol?.id || 'unknown';
-    return protocolId !== 'unknown';
+    // First try direct protocol ID from campaign
+    let protocolId = c.mainProtocolId || c.protocol?.id;
+    
+    // If not found, try to get from opportunity data if available
+    if (!protocolId && c.opportunityId && allOpportunities) {
+      const opportunity = allOpportunities.find((opp: any) => 
+        opp.id === c.opportunityId || opp.opportunityId === c.opportunityId
+      );
+      if (opportunity) {
+        protocolId = opportunity.mainProtocolId || opportunity.protocol?.id;
+      }
+    }
+    
+    return protocolId && protocolId !== 'unknown';
   }).length : 0;
   const campaignDataCompleteness = allCampaigns ? (campaignsWithData / allCampaigns.length * 100).toFixed(1) : '0';
   
@@ -364,7 +413,8 @@ ${allOpportunities ? `✅ **Opportunities Data**: ${allOpportunities.length} tot
 
 ## Key Metrics Explained
 - **TVL Cost**: (Incentives annualized / TVL) × 100. This represents the APR being paid to attract TVL. Lower is better.
-- **WoW Change**: Week-over-week percentage change in TVL Cost. Negative is better (cost decreased).
+- **Volume Cost**: (Incentives annualized / Volume) × 100. This represents the cost per dollar of trading volume. Lower is better. Only applicable for DEX pools with volume data.
+- **WoW Change**: Week-over-week percentage change in TVL Cost or Volume Cost. Negative is better (cost decreased).
 - **APR**: Annual Percentage Rate from Merkl incentives.
 
 ## Asset Classification & Expected Ranges
@@ -405,7 +455,7 @@ Pools are grouped by asset risk profile. **Only compare pools within the same as
   prompt += await addExampleOpportunitiesSection(allPools, allOpportunities);
   
   // Add campaigns section
-  prompt += await addCampaignsSection(allPools, allCampaigns);
+  prompt += await addCampaignsSection(allPools, allCampaigns, allOpportunities);
   
   // Add all opportunities context
   prompt += await addAllOpportunitiesContext(allOpportunities);
@@ -472,6 +522,16 @@ async function addPoolDataSection(
         section += `  - Volume: ${pool.volume ? `$${(pool.volume / 1000000).toFixed(2)}M` : 'N/A'}\n`;
         section += `  - APR: ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}\n`;
         section += `  - TVL Cost: ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}\n`;
+
+        // Calculate Volume Cost (annualized cost per volume)
+        const volumeCost = pool.volume && pool.incentivesUSD && pool.volume > 0
+          ? ((pool.incentivesUSD / pool.periodDays * 365) / pool.volume * 100)
+          : null;
+        if (volumeCost !== null) {
+          section += `  - Volume Cost: ${volumeCost.toFixed(2)}%\n`;
+        }
+
+        // TVL Cost WoW Change
         let wowChangeValue = pool.wowChange;
         if ((wowChangeValue === null || wowChangeValue === undefined) && prevPool && pool.tvlCost !== null && prevPool.tvlCost !== null && prevPool.tvlCost !== 0) {
           wowChangeValue = ((pool.tvlCost - prevPool.tvlCost) / prevPool.tvlCost) * 100;
@@ -480,6 +540,33 @@ async function addPoolDataSection(
           section += `  - TVL Cost WoW Change: ${wowChangeValue > 0 ? '+' : ''}${wowChangeValue.toFixed(2)}%\n`;
         } else if (prevPool) {
           section += `  - TVL Cost WoW Change: N/A (missing TVL Cost data)\n`;
+        }
+
+        // Volume Cost WoW Change
+        if (prevPool && prevPool.volume) {
+          const prevVolumeCost = prevPool.volume && prevPool.incentivesUSD && prevPool.volume > 0
+            ? ((prevPool.incentivesUSD / prevPool.periodDays * 365) / prevPool.volume * 100)
+            : null;
+
+          section += `  - Previous Week Volume: ${prevPool.volume ? `$${(prevPool.volume / 1000000).toFixed(2)}M` : 'N/A'}\n`;
+
+          const volumeChange = prevPool.volume && pool.volume
+            ? ((pool.volume - prevPool.volume) / prevPool.volume * 100)
+            : null;
+          if (volumeChange !== null) {
+            section += `  - Volume Change WoW: ${volumeChange > 0 ? '+' : ''}${volumeChange.toFixed(2)}%\n`;
+          }
+
+          if (volumeCost !== null && prevVolumeCost !== null && prevVolumeCost !== 0) {
+            const volumeCostWoWChange = ((volumeCost - prevVolumeCost) / prevVolumeCost) * 100;
+            section += `  - Volume Cost WoW Change: ${volumeCostWoWChange > 0 ? '+' : ''}${volumeCostWoWChange.toFixed(2)}%\n`;
+          } else if (volumeCost === null) {
+            section += `  - Volume Cost WoW Change: N/A (current week volume missing)\n`;
+          } else if (prevVolumeCost === null) {
+            section += `  - Volume Cost WoW Change: N/A (previous week volume missing)\n`;
+          }
+        } else if (volumeCost !== null) {
+          section += `  - Volume Cost WoW Change: N/A (no previous week volume data)\n`;
         }
       }
     }
@@ -533,10 +620,22 @@ async function addPoolDataSection(
         section += `    - TVL: $${pool.tvl ? (pool.tvl / 1000000).toFixed(2) + 'M' : 'N/A'}\n`;
         section += `    - TVL Cost: ${poolTVLCost}\n`;
         section += `    - APR: ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}\n`;
-        
+
+        // Add volume data for current week
+        if (pool.volume) {
+          section += `    - Volume: $${(pool.volume / 1000000).toFixed(2)}M\n`;
+          const periodDays = Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+          const poolVolumeCost = pool.volume && pool.incentivesUSD && pool.volume > 0
+            ? ((pool.incentivesUSD / periodDays * 365) / pool.volume * 100).toFixed(2) + '%'
+            : 'N/A';
+          if (poolVolumeCost !== 'N/A') {
+            section += `    - Volume Cost: ${poolVolumeCost}\n`;
+          }
+        }
+
         if (prevPool) {
           const prevPoolTVLCost = prevPool.tvl && prevPool.incentivesUSD ? calculateTVLCostFromData(prevPool.incentivesUSD, prevPool.tvl, prevStartDate, prevEndDate) : 'N/A';
-          const incentiveChange = prevPool.incentivesUSD && pool.incentivesUSD 
+          const incentiveChange = prevPool.incentivesUSD && pool.incentivesUSD
             ? ((pool.incentivesUSD - prevPool.incentivesUSD) / prevPool.incentivesUSD * 100)
             : null;
           const tvlChange = prevPool.tvl && pool.tvl
@@ -548,11 +647,24 @@ async function addPoolDataSection(
           const tvlCostChangePercent = prevPoolTVLCost !== 'N/A' && tvlCostChange !== null
             ? (tvlCostChange / parseFloat(prevPoolTVLCost.replace('%', ''))) * 100
             : null;
-          
+
           section += `  Previous Week:\n`;
           section += `    - Incentives: ${prevPool.incentivesMON.toFixed(2)} MON ($${prevPool.incentivesUSD.toFixed(2)})\n`;
           section += `    - TVL: $${prevPool.tvl ? (prevPool.tvl / 1000000).toFixed(2) + 'M' : 'N/A'}\n`;
           section += `    - TVL Cost: ${prevPoolTVLCost}\n`;
+
+          // Add volume data for previous week
+          if (prevPool.volume) {
+            section += `    - Volume: $${(prevPool.volume / 1000000).toFixed(2)}M\n`;
+            const prevPeriodDays = Math.floor((new Date(prevEndDate).getTime() - new Date(prevStartDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+            const prevPoolVolumeCost = prevPool.volume && prevPool.incentivesUSD && prevPool.volume > 0
+              ? ((prevPool.incentivesUSD / prevPeriodDays * 365) / prevPool.volume * 100).toFixed(2) + '%'
+              : 'N/A';
+            if (prevPoolVolumeCost !== 'N/A') {
+              section += `    - Volume Cost: ${prevPoolVolumeCost}\n`;
+            }
+          }
+
           section += `  WoW Changes:\n`;
           if (incentiveChange !== null) {
             section += `    - Incentive Change: ${incentiveChange > 0 ? '+' : ''}${incentiveChange.toFixed(2)}%\n`;
@@ -563,7 +675,28 @@ async function addPoolDataSection(
           if (tvlCostChangePercent !== null) {
             section += `    - TVL Cost Change: ${tvlCostChangePercent > 0 ? '+' : ''}${tvlCostChangePercent.toFixed(2)}%\n`;
           }
-          
+
+          // Add volume WoW changes
+          if (pool.volume && prevPool.volume) {
+            const volumeChange = ((pool.volume - prevPool.volume) / prevPool.volume * 100);
+            section += `    - Volume Change: ${volumeChange > 0 ? '+' : ''}${volumeChange.toFixed(2)}%\n`;
+
+            const currentPeriodDays = Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+            const prevPeriodDays = Math.floor((new Date(prevEndDate).getTime() - new Date(prevStartDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+            const currentVolumeCost = pool.volume && pool.incentivesUSD && pool.volume > 0
+              ? ((pool.incentivesUSD / currentPeriodDays * 365) / pool.volume * 100)
+              : null;
+            const prevVolumeCost = prevPool.volume && prevPool.incentivesUSD && prevPool.volume > 0
+              ? ((prevPool.incentivesUSD / prevPeriodDays * 365) / prevPool.volume * 100)
+              : null;
+
+            if (currentVolumeCost !== null && prevVolumeCost !== null && prevVolumeCost !== 0) {
+              const volumeCostChangePercent = ((currentVolumeCost - prevVolumeCost) / prevVolumeCost) * 100;
+              section += `    - Volume Cost Change: ${volumeCostChangePercent > 0 ? '+' : ''}${volumeCostChangePercent.toFixed(2)}%\n`;
+            }
+          }
+
           if (incentiveChange !== null && tvlChange !== null) {
             const expectedChange = ((1 + incentiveChange / 100) / (1 + tvlChange / 100) - 1) * 100;
             section += `    - Expected TVL Cost Change (mechanical): ${expectedChange > 0 ? '+' : ''}${expectedChange.toFixed(2)}%\n`;
@@ -609,8 +742,8 @@ async function addExampleOpportunitiesSection(allPools: PoolData[], allOpportuni
   for (const opp of allOpportunities) {
     const oppText = `${opp.name || ''} ${opp.opportunityId || ''}`.toLowerCase();
     
-    // Extract token pair with one regex match
-    const match = oppText.match(/([a-z0-9]+)[-\/]([a-z0-9]+)/i);
+    // Extract token pair with one regex match (using pre-compiled regex)
+    const match = oppText.match(TOKEN_PAIR_REGEX_CASE_INSENSITIVE);
     const tokenPair = match ? `${match[1]}-${match[2]}`.toLowerCase() : null;
     
     // Only process if token pair matches current pools
@@ -677,7 +810,7 @@ async function addExampleOpportunitiesSection(allPools: PoolData[], allOpportuni
 /**
  * Helper: Add campaigns section
  */
-async function addCampaignsSection(allPools: PoolData[], allCampaigns?: any[]): Promise<string> {
+async function addCampaignsSection(allPools: PoolData[], allCampaigns?: any[], allOpportunities?: any[]): Promise<string> {
   if (!allCampaigns || allCampaigns.length === 0) {
     return '';
   }
@@ -697,8 +830,31 @@ async function addCampaignsSection(allPools: PoolData[], allCampaigns?: any[]): 
   const allTokenPairs = new Set(allPools.map(p => p.tokenPair.toLowerCase()));
   let unknownCount = 0;
   
+  // Create opportunity ID to protocol ID map for faster lookup
+  const opportunityProtocolMap: Record<string, string> = {};
+  if (allOpportunities) {
+    for (const opp of allOpportunities) {
+      const oppId = opp.id || opp.opportunityId;
+      const oppProtocolId = opp.mainProtocolId || opp.protocol?.id;
+      if (oppId && oppProtocolId) {
+        opportunityProtocolMap[String(oppId)] = oppProtocolId;
+      }
+    }
+  }
+  
   for (const campaign of allCampaigns) {
-    const protocolId = campaign.mainProtocolId || campaign.protocol?.id || 'unknown';
+    // Try to get protocol ID from campaign first
+    let protocolId = campaign.mainProtocolId || campaign.protocol?.id;
+    
+    // If not found, try to get from opportunity data
+    if (!protocolId && campaign.opportunityId) {
+      protocolId = opportunityProtocolMap[String(campaign.opportunityId)];
+    }
+    
+    // Fallback to unknown
+    if (!protocolId) {
+      protocolId = 'unknown';
+    }
     
     if (protocolId === 'unknown') {
       unknownCount++;
@@ -706,7 +862,7 @@ async function addCampaignsSection(allPools: PoolData[], allCampaigns?: any[]): 
     }
     
     const oppId = (campaign.opportunityId || '').toLowerCase();
-    const match = oppId.match(/([a-z0-9]+)[-\/]([a-z0-9]+)/i);
+    const match = oppId.match(TOKEN_PAIR_REGEX_CASE_INSENSITIVE);
     const tokenPair = match ? `${match[1]}-${match[2]}`.toLowerCase() : null;
     
     if (tokenPair && allTokenPairs.has(tokenPair)) {
@@ -813,6 +969,10 @@ async function addAnalysisGuidelines(mode: AnalysisMode, canPerformWowAnalysis: 
     
     section += `2. **Efficiency Assessment Using Expected Ranges**:\n`;
     section += `   - Compare each pool's TVL Cost against the expected range for its asset type (see table above)\n`;
+    section += `   - **FOR DEX POOLS WITH VOLUME DATA**: Prioritize Volume Cost analysis over TVL Cost\n`;
+    section += `     * Volume Cost 1-5%: Excellent efficiency (major pairs like USDC-USDT, WBTC-USDC)\n`;
+    section += `     * Volume Cost 5-10%: Good efficiency (standard pairs)\n`;
+    section += `     * Volume Cost >10%: Poor efficiency - spending too much per dollar of trading\n`;
     section += `   - Flag pools exceeding expected range by >30% as high priority issues\n`;
     section += `   - Within the same asset class, pools with the same token pairs should have similar TVL Costs\n`;
     section += `   - Flag when TVL Cost differs by >20% between pools with same token pair and asset type\n`;
@@ -919,10 +1079,37 @@ async function addAnalysisGuidelines(mode: AnalysisMode, canPerformWowAnalysis: 
   section += `   - If competitor incentives unavailable: MUST note: "Cannot compare incentive efficiency directly"\n`;
   
   if (!isProtocolLevel) {
-    section += `\n5. **Volume Data Quality**:\n`;
-    section += `   - If volume appears uniform across pools (same value), note that this may indicate data aggregation issues\n`;
-    section += `   - Do not make conclusions based on unreliable volume data\n`;
-    section += `   - Focus on TVL Cost analysis instead when volume data is suspect\n`;
+    section += `\n5. **Volume Cost Analysis** - CRITICAL FOR DEX POOLS:\n`;
+    section += `   **IMPORTANT**: Volume data is fetched from Dune Analytics on a per-pool basis for Uniswap and other DEX protocols.\n`;
+    section += `   **When volume data is available (not N/A), you MUST analyze it thoroughly.**\n`;
+    section += `   \n`;
+    section += `   **Volume Cost Calculation**:\n`;
+    section += `   - **Volume Cost** = (Incentives annualized / Volume) × 100\n`;
+    section += `   - This measures cost per dollar of trading volume - lower is significantly better than TVL Cost\n`;
+    section += `   - For DEX pools, Volume Cost is often more important than TVL Cost because:\n`;
+    section += `     * It measures actual trading activity, not passive liquidity\n`;
+    section += `     * Lower Volume Cost = more efficient incentive spend per dollar of trading\n`;
+    section += `     * High TVL with low volume = inefficient farming (bad)\n`;
+    section += `     * Moderate TVL with high volume = efficient trading (good)\n`;
+    section += `   \n`;
+    section += `   **Analysis Requirements When Volume Data Exists**:\n`;
+    section += `   - Include Volume Cost in your Key Findings section\n`;
+    section += `   - Compare Volume Cost across pools (typical good range: 1-5% for major pairs, 5-15% for exotic pairs)\n`;
+    section += `   - **Create separate Volume Cost WoW explanations** for pools with volume data\n`;
+    section += `   - If Volume Cost WoW Change differs from TVL Cost WoW Change (>10% difference), explain why:\n`;
+    section += `     * Volume increased faster than TVL → Volume Cost decreased (good efficiency - more trading per dollar of TVL)\n`;
+    section += `     * Volume decreased faster than TVL → Volume Cost increased (worse efficiency - farming without trading)\n`;
+    section += `     * Volume and TVL moved together → Volume Cost change similar to TVL Cost change (proportional relationship)\n`;
+    section += `   \n`;
+    section += `   **When to Flag Volume Issues**:\n`;
+    section += `   - Volume Cost > 10%: Flag as "HIGH" efficiency issue (spending too much per dollar of trading)\n`;
+    section += `   - Volume Cost increased WoW while TVL Cost decreased: Flag as concern (TVL growing but trading declining)\n`;
+    section += `   - Volume decreased significantly (>20%) while TVL stable: Flag as "MEDIUM" - pool becoming less active\n`;
+    section += `   \n`;
+    section += `   **Data Quality Notes**:\n`;
+    section += `   - If volume is N/A for a pool, note it but don't penalize the analysis\n`;
+    section += `   - If volume appears identical across multiple pools, note potential aggregation issue\n`;
+    section += `   - When pool-specific volume IS available (from Dune), trust it and analyze it fully\n`;
   }
   
   section += `\n## CRITICAL: Where to Find Competitor Data\n\n`;
@@ -1042,7 +1229,7 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
     section += `      "mechanicalChange": 9.1,\n`;
     section += `      "mechanicalExplanation": "Expected change from +6.7% incentives and -2.2% TVL: (1.067/0.978 - 1) ≈ +9.1%",\n`;
     section += `      "discrepancy": 6.4,\n`;
-    section += `      "explanation": "full explanation including mechanical math and any additional factors",\n`;
+    section += `      "explanation": "full explanation including mechanical math and any additional factors (FOR TVL COST)",\n`;
     section += `      "likelyCause": "competitor_pools|tvl_shift|new_pools|incentive_change|other",\n`;
     section += `      "confidence": "high|medium|low",\n`;
     section += `      "competitorLinks": [\n`;
@@ -1058,8 +1245,24 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
     section += `      ]\n`;
     section += `    }\n`;
     section += `  ],\n`;
+    section += `  "volumeCostWowExplanations": [\n`;
+    section += `    {\n`;
+    section += `      "poolId": "protocol-fundingProtocol-marketName",\n`;
+    section += `      "volumeCostChange": -17.48,\n`;
+    section += `      "volumeChange": 23.2,\n`;
+    section += `      "incentiveChange": 6.7,\n`;
+    section += `      "explanation": "Volume Cost decreased 17.48% due to volume increasing 23.2% faster than incentives (+6.7%). This indicates improved trading efficiency - more trading activity per dollar of incentive. Current volume: $104.75M (vs $85.03M prev week). Volume Cost improved from 3.54% to 2.87%, which is excellent for a major trading pair.",\n`;
+    section += `      "efficiency": "improving|stable|declining",\n`;
+    section += `      "significance": "high|medium|low"\n`;
+    section += `    }\n`;
+    section += `  ],\n`;
     section += `  "recommendations": ["recommendation1", "recommendation2", ...]\n`;
     section += `}\n`;
+    section += `\n**CRITICAL**: When volume data is available for a pool, you MUST include an entry in volumeCostWowExplanations array.\n`;
+    section += `- Explain volume cost changes in terms of trading activity, not just TVL\n`;
+    section += `- Compare volume growth/decline to incentive changes\n`;
+    section += `- Note if pool is attracting more/less trading activity\n`;
+    section += `- Flag if TVL is growing but volume is declining (inefficient farming)\n\n`;
   }
   
   section += `\n## Important Notes - CRITICAL REQUIREMENTS\n\n`;
@@ -1142,639 +1345,6 @@ async function generateProtocolLevelPrompt(
   }, allCampaigns, allOpportunities);
 }
 
-// Remove old implementation - keeping for reference during transition
-const _OLD_generateAnalysisPrompt = async (request: AnalysisRequest, allCampaigns?: any[], allOpportunities?: any[]): Promise<string> => {
-  const { currentWeek, previousWeek } = request;
-  const similarPools = groupSimilarPools(currentWeek.pools);
-  
-  // Calculate data quality metrics
-  const hasPreviousWeek = !!previousWeek;
-  const poolsWithPreviousData = currentWeek.pools.filter(pool => {
-    if (!previousWeek) return false;
-    return previousWeek.pools.some(prev => 
-      prev.protocol === pool.protocol && 
-      prev.fundingProtocol === pool.fundingProtocol && 
-      prev.marketName === pool.marketName
-    );
-  }).length;
-  const canPerformWowAnalysis = hasPreviousWeek && poolsWithPreviousData > 0;
-  const poolsWithWowData = currentWeek.pools.filter(p => p.wowChange !== null).length;
-  
-  // Count campaigns with useful data (not "unknown")
-  const campaignsWithData = allCampaigns ? allCampaigns.filter(c => {
-    const protocolId = c.mainProtocolId || c.protocol?.id || 'unknown';
-    return protocolId !== 'unknown';
-  }).length : 0;
-  const campaignDataCompleteness = allCampaigns ? (campaignsWithData / allCampaigns.length * 100).toFixed(1) : '0';
-
-  let prompt = `You are analyzing DeFi incentive efficiency on Monad chain. Your goal is to identify areas for improvement and explain efficiency changes.
-
-## Context
-- **Current Period**: ${currentWeek.startDate} to ${currentWeek.endDate}
-- **Previous Period**: ${previousWeek ? `${previousWeek.startDate} to ${previousWeek.endDate}` : 'Not available'}
-- **MON Price**: ${currentWeek.monPrice ? `$${currentWeek.monPrice}` : 'Not provided'}
-
-## Data Quality Assessment
-${canPerformWowAnalysis ? '✅' : '❌'} **WoW Analysis**: ${canPerformWowAnalysis ? `Available for ${poolsWithWowData}/${currentWeek.pools.length} pools` : 'NOT AVAILABLE - Previous period data missing'}
-${hasPreviousWeek ? '✅' : '❌'} **Previous Week Data**: ${hasPreviousWeek ? `Available for ${poolsWithPreviousData}/${currentWeek.pools.length} pools` : 'MISSING'}
-${allCampaigns ? `⚠️ **Competitor Data**: ${campaignDataCompleteness}% of campaigns have identifiable protocol data (${campaignsWithData}/${allCampaigns.length} campaigns)` : '⚠️ **Competitor Data**: Not fetched'}
-${currentWeek.pools.some(p => p.volume) ? '✅' : '⚠️'} **Volume Data**: ${currentWeek.pools.filter(p => p.volume).length}/${currentWeek.pools.length} pools have volume data
-
-**Impact**: ${canPerformWowAnalysis ? 'WoW analysis can be performed for pools with previous data.' : 'WoW analysis CANNOT be performed - missing previous period data.'} ${allCampaigns && parseFloat(campaignDataCompleteness) < 50 ? 'Competitive analysis is severely limited due to missing campaign data.' : ''}
-
-## Calculation Notes
-- **TVL Cost WoW Change** = ((Current TVL Cost - Previous TVL Cost) / Previous TVL Cost) × 100
-- **Expected Mechanical Change** = (1 + Incentive Change%) / (1 + TVL Change%) - 1
-  * This estimates what TVL Cost change should be based purely on incentive/TVL math
-  * If actual change differs by >15%, external factors (competitors, market conditions) are likely involved
-  * Example: +6.7% incentives, -2.2% TVL → Expected: (1.067/0.978 - 1) ≈ +9.1% TVL Cost
-
-## Key Metrics Explained
-- **TVL Cost**: (Incentives annualized / TVL) × 100. This represents the APR being paid to attract TVL. Lower is better.
-- **WoW Change**: Week-over-week percentage change in TVL Cost. Negative is better (cost decreased).
-- **APR**: Annual Percentage Rate from Merkl incentives.
-
-## Asset Classification & Expected Ranges
-Pools are grouped by asset risk profile. **Only compare pools within the same asset type.**
-
-| Asset Type | Definition | Expected TVL Cost Range |
-|------------|------------|------------------------|
-| **Stablecoin** | Both tokens are stablecoins (USDC/USDT/DAI/AUSD) | 5-15% |
-| **Stablecoin-Derivative** | Stablecoin + yield-bearing stablecoin (AUSD-earnAUSD, USDC-sUSDC) | 8-18% |
-| **MON Pairs** | Contains MON token (MON-USDC, MON-AUSD, MON-wBTC) - L1-native token pairs | 20-60% |
-| **BTC Pairs** | Contains BTC (wBTC-USDC, wBTC-AUSD) | 10-25% |
-| **LST Pairs** | Contains liquid staking tokens (stETH-ETH, rETH-USDC) | 8-20% |
-| **Commodity** | Tokenized commodities (XAUt0-AUSD for gold) | 10-25% |
-
-**Asset type is determined by the riskier/more volatile token in the pair.**
-
-## Analysis Guidelines - CRITICAL RULES
-
-1. **Asset Class Comparison Only**: 
-   - ONLY compare pools within the same asset type (see table above for expected ranges)
-   - NEVER compare across asset types (e.g., MON pools vs BTC pools, LST pools vs stablecoin pools)
-   - Different asset classes have different risk profiles and expected yields - comparing them is meaningless
-   - **IMPORTANT**: Commodity pools (e.g., AUSD-XAUt0 where XAUt0 is gold) are NOT the same as stablecoin pools (e.g., AUSD-USDT0). Do NOT compare them.
-
-2. **Efficiency Assessment Using Expected Ranges**:
-   - Compare each pool's TVL Cost against the expected range for its asset type (see table above)
-   - Flag pools exceeding expected range by >30% as high priority issues
-   - Within the same asset class, pools with the same token pairs should have similar TVL Costs
-   - Flag when TVL Cost differs by >20% between pools with same token pair and asset type
-   - Use Uniswap pools as baseline within each asset class
-
-3. **WoW Change Analysis - Check Internal Factors FIRST**:
-   ${canPerformWowAnalysis ? '' : '**⚠️ WARNING: Previous week data is missing. WoW analysis CANNOT be performed.**'}
-   - For each significant WoW change (>20% increase or <-20% decrease), follow this order:
-   
-   **STEP 1: Check Internal Math (Incentive Efficiency & TVL Retention)**
-     a) Calculate incentive change: (Current incentives - Previous incentives) / Previous incentives × 100
-     b) Calculate TVL change: (Current TVL - Previous TVL) / Previous TVL × 100
-     c) **If incentives increased while TVL decreased**: This is a mechanical efficiency drop - incentives grew but didn't retain/grow TVL proportionally
-     d) **If incentives decreased while TVL increased**: This is efficiency improvement - less incentives needed for more TVL
-     e) **If incentives increased while TVL stayed flat**: TVL Cost increase is due to higher incentives, not TVL loss
-     f) **If incentives stayed similar (±10%) but TVL dropped**: Then look for external factors (competitors, market conditions)
-   
-   **STEP 2: Only After Internal Factors Checked, Look for Competitors**
-     - If internal factors don't explain the change (e.g., incentives flat but TVL dropped), THEN identify competitor campaigns (see point 4)
-     - Competitor analysis is secondary - internal efficiency is primary
-   
-   - **Confidence Level**: 
-     * High: Have previous week data + clear internal factor explanation OR identified specific competitors
-     * Medium: Have previous week data but unclear cause OR have competitors but no previous data
-     * Low: Missing both previous data and competitor data
-
-4. **Identify Specific Competitor Pools with Same Token Pair** (Only if internal factors don't explain WoW change):
-   - **ONLY use this if**: Incentives stayed similar (±10%) but TVL dropped - then competitors may have attracted TVL
-   - Find pools with the EXACT SAME token pair from "Example Opportunities" section (prioritize LP pools)
-   - **Compare by APR** (TVL Cost and incentives may not be available for competitor pools)
-   - If another LP pool with the same token pair has significantly higher APR, it may have attracted TVL
-   - Include these competing pools in the competitorLinks array with their Merkl URLs and APR
-   - **Note**: TVL Cost and incentives for competitor pools are often unavailable - APR comparison is acceptable when TVL Cost unavailable
-   - Example: If analyzing "uniswap-upshift-MON-USDC" with +24.69% WoW increase and incentives were flat, find other MON-USDC LP pools and compare their APRs
-
-5. **Volume Data Quality**:
-   - If volume appears uniform across pools (same value), note that this may indicate data aggregation issues
-   - Do not make conclusions based on unreliable volume data
-   - Focus on TVL Cost analysis instead when volume data is suspect
-
-## Current Week Pool Data
-`;
-
-  // Add pool data grouped by protocol
-  const poolsByProtocol: Record<string, PoolData[]> = {};
-  for (const pool of currentWeek.pools) {
-    if (!poolsByProtocol[pool.protocol]) {
-      poolsByProtocol[pool.protocol] = [];
-    }
-    poolsByProtocol[pool.protocol].push(pool);
-  }
-
-  // Helper function to classify asset type more accurately
-  function classifyAssetType(tokenPair: string, marketName: string): string {
-    const tokenPairLower = tokenPair.toLowerCase();
-    const marketNameLower = marketName.toLowerCase();
-    
-    // Extract tokens from pair (e.g., "MON-USDC" -> ["mon", "usdc"])
-    const tokens = tokenPairLower.split('-').filter(t => t.length > 0);
-    
-    // Check for gold/commodity tokens first (XAUt0, XAU, etc.) - these are NOT stablecoins
-    if (tokenPairLower.includes('xaut') || tokenPairLower.includes('xau') || marketNameLower.includes('xaut') || marketNameLower.includes('xau') || marketNameLower.includes('gold')) {
-      return 'commodity-related';
-    }
-    
-    // Check for MON token (must be exact token match, not substring like "earnAUSD")
-    // MON token patterns: "mon", "wmon", "stmon", "shmon" but NOT "earnAUSD", "common", etc.
-    const monPatterns = ['-mon', 'mon-', '^mon$', 'wmon', 'stmon', 'shmon'];
-    const hasMonToken = tokens.some(token => 
-      monPatterns.some(pattern => {
-        if (pattern.startsWith('^') || pattern.endsWith('$')) {
-          return token === pattern.replace(/[\^$]/g, '');
-        }
-        return token.includes(pattern.replace(/[-]/g, ''));
-      })
-    ) || marketNameLower.match(/\b(mon|wmon|stmon|shmon)\b/);
-    
-    if (hasMonToken) {
-      return 'mon-related';
-    }
-    
-    // Check for BTC tokens
-    if (tokenPairLower.includes('btc') || tokenPairLower.includes('wbtc') || tokenPairLower.includes('lbtc') || marketNameLower.includes('btc')) {
-      return 'btc-related';
-    }
-    
-    // Check for LST tokens
-    if (tokenPairLower.includes('lst') || marketNameLower.includes('lst') || tokenPairLower.includes('stmon') || tokenPairLower.includes('shmon') || 
-        tokenPairLower.includes('steth') || tokenPairLower.includes('reth') || tokenPairLower.includes('wsteth')) {
-      return 'lst-related';
-    }
-    
-    // Check for stablecoins (USDC, USDT, DAI, AUSD, etc.)
-    const stablecoinPatterns = ['usdc', 'usdt', 'dai', 'ausd', '3pool'];
-    const hasStablecoin = tokens.some(token => 
-      stablecoinPatterns.some(pattern => token.includes(pattern))
-    ) || marketNameLower.match(/\b(usdc|usdt|dai|ausd|3pool)\b/);
-    
-    if (hasStablecoin) {
-      // Check if paired with yield-bearing stablecoin (earnAUSD, sUSDC, etc.)
-      const yieldStablePatterns = ['earnausd', 'susdc', 'yusdc', 'yusdt', 'yausd'];
-      const hasYieldStable = tokens.some(token => 
-        yieldStablePatterns.some(pattern => token.includes(pattern))
-      ) || marketNameLower.match(/\b(earnausd|susdc|yusdc|yusdt|yausd)\b/);
-      
-      if (hasYieldStable) {
-        return 'stablecoin-derivative';
-      }
-      return 'stablecoin-related';
-    }
-    
-    return 'other';
-  }
-
-  // Note: Asset type classification is done by AI based on the classification table in the prompt
-
-  for (const [protocol, pools] of Object.entries(poolsByProtocol)) {
-    prompt += `\n### ${protocol.toUpperCase()} Protocol\n`;
-    for (const pool of pools) {
-      // Find previous week data for this pool
-      const prevPool = previousWeek?.pools.find(p => 
-        p.protocol === pool.protocol && 
-        p.fundingProtocol === pool.fundingProtocol && 
-        p.marketName === pool.marketName
-      );
-      
-      prompt += `- **${pool.marketName}**\n`;
-      prompt += `  - Funding Protocol: ${pool.fundingProtocol}\n`;
-      prompt += `  - Token Pair: ${pool.tokenPair}\n`;
-      prompt += `  - Current Week Incentives: ${pool.incentivesMON.toFixed(2)} MON${pool.incentivesUSD ? ` ($${pool.incentivesUSD.toFixed(2)})` : ''}\n`;
-      if (prevPool) {
-        prompt += `  - Previous Week Incentives: ${prevPool.incentivesMON.toFixed(2)} MON${prevPool.incentivesUSD ? ` ($${prevPool.incentivesUSD.toFixed(2)})` : ''}\n`;
-        const incentiveChange = prevPool.incentivesUSD && pool.incentivesUSD 
-          ? ((pool.incentivesUSD - prevPool.incentivesUSD) / prevPool.incentivesUSD * 100).toFixed(1)
-          : 'N/A';
-        prompt += `  - Incentive Change WoW: ${incentiveChange !== 'N/A' ? (parseFloat(incentiveChange) > 0 ? '+' : '') + incentiveChange + '%' : 'N/A'}\n`;
-        prompt += `  - Previous Week TVL: ${prevPool.tvl ? `$${(prevPool.tvl / 1000000).toFixed(2)}M` : 'N/A'}\n`;
-        prompt += `  - Previous Week TVL Cost: ${prevPool.tvlCost ? `${prevPool.tvlCost.toFixed(2)}%` : 'N/A'}\n`;
-      } else {
-        prompt += `  - Previous Week Data: MISSING (WoW analysis not possible)\n`;
-      }
-      prompt += `  - TVL: ${pool.tvl ? `$${(pool.tvl / 1000000).toFixed(2)}M` : 'N/A'}\n`;
-      prompt += `  - Volume: ${pool.volume ? `$${(pool.volume / 1000000).toFixed(2)}M` : 'N/A'}\n`;
-      prompt += `  - APR: ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}\n`;
-      prompt += `  - TVL Cost: ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}\n`;
-      // Calculate WoW change if not provided but we have both current and previous TVL Cost
-      let wowChangeValue = pool.wowChange;
-      if ((wowChangeValue === null || wowChangeValue === undefined) && prevPool && pool.tvlCost !== null && prevPool.tvlCost !== null && prevPool.tvlCost !== 0) {
-        wowChangeValue = ((pool.tvlCost - prevPool.tvlCost) / prevPool.tvlCost) * 100;
-      }
-      if (wowChangeValue !== null && wowChangeValue !== undefined) {
-        prompt += `  - TVL Cost WoW Change: ${wowChangeValue > 0 ? '+' : ''}${wowChangeValue.toFixed(2)}%\n`;
-      } else if (prevPool) {
-        prompt += `  - TVL Cost WoW Change: N/A (missing TVL Cost data)\n`;
-      }
-    }
-  }
-  
-  // Note: Asset type grouping removed - AI will classify pools based on token pairs and the classification table
-
-  // Add similar pools comparison with Merkl URLs
-  prompt += `\n## Similar Pools Comparison\n`;
-  prompt += `These are pools from your selected protocols with the same token pairs. Use these for direct comparisons.\n`;
-  for (const [tokenPair, pools] of Object.entries(similarPools)) {
-    if (pools.length > 1) {
-      prompt += `\n### ${tokenPair.toUpperCase()} Pools (${pools.length} pools)\n`;
-      for (const pool of pools) {
-        const merklLink = pool.merklUrl ? ` [Merkl: ${pool.merklUrl}]` : '';
-        prompt += `- ${pool.protocol} (${pool.fundingProtocol}): TVL Cost ${pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : 'N/A'}, APR ${pool.apr ? `${pool.apr.toFixed(2)}%` : 'N/A'}, Incentives ${pool.incentivesMON.toFixed(2)} MON${merklLink}\n`;
-      }
-    }
-  }
-
-  // Note: Opportunity type classification is done inline - AI can determine type from names
-
-  // Add examples from other Merkl opportunities with same token pairs
-  if (allOpportunities && allOpportunities.length > 0) {
-    prompt += `\n## Example Opportunities from Other Protocols (Same Token Pairs)\n`;
-    prompt += `These are examples of other pools/markets on Monad with the same token pairs as pools you're analyzing.\n`;
-    prompt += `**IMPORTANT**: Opportunities are grouped by type (LP Pools, Lending Markets, Borrowing). Only compare pools of the same type.\n`;
-    
-    // Extract token pairs from current pools
-    const currentTokenPairs = new Set(currentWeek.pools.map(p => p.tokenPair.toLowerCase()));
-    
-    // Group opportunities by token pair and type - OPTIMIZED: Single pass O(n) instead of O(n²)
-    const opportunitiesByTokenPair: Record<string, {
-      lp: any[];
-      lending: any[];
-      borrowing: any[];
-      other: any[];
-    }> = {};
-    
-    for (const opp of allOpportunities) {
-      const oppText = `${opp.name || ''} ${opp.opportunityId || ''}`.toLowerCase();
-      
-      // Extract token pair with one regex match
-      const match = oppText.match(/([a-z0-9]+)[-\/]([a-z0-9]+)/i);
-      const tokenPair = match ? `${match[1]}-${match[2]}`.toLowerCase() : null;
-      
-      // Only process if token pair matches current pools
-      if (tokenPair && currentTokenPairs.has(tokenPair)) {
-        if (!opportunitiesByTokenPair[tokenPair]) {
-          opportunitiesByTokenPair[tokenPair] = { lp: [], lending: [], borrowing: [], other: [] };
-        }
-        
-        // Classify type with simple contains check
-        const oppType = oppText.includes('liquidity') || oppText.includes('pool') || oppText.includes('swap') ? 'lp' :
-                        oppText.includes('borrow') ? 'borrowing' :
-                        oppText.includes('supply') || oppText.includes('lend') || oppText.includes('deposit') ? 'lending' : 'other';
-        
-        opportunitiesByTokenPair[tokenPair][oppType].push(opp);
-      }
-    }
-    
-    // Show examples for each token pair, grouped by type
-    for (const tokenPair of Array.from(currentTokenPairs).sort()) {
-      const grouped = opportunitiesByTokenPair[tokenPair];
-      if (!grouped) continue;
-      
-      const totalCount = grouped.lp.length + grouped.lending.length + grouped.borrowing.length + grouped.other.length;
-      if (totalCount === 0) continue;
-      
-      prompt += `\n### ${tokenPair.toUpperCase()} Examples (${totalCount} total opportunities):\n`;
-      
-      // LP Pools
-      if (grouped.lp.length > 0) {
-        prompt += `\n**LP Pools** (${grouped.lp.length} pools) - Compare TVL Cost and APR:\n`;
-        for (const opp of grouped.lp.slice(0, 10)) {
-          const protocolId = opp.mainProtocolId || opp.protocol?.id || 'unknown';
-          const oppName = opp.name || opp.opportunityId || 'Unknown';
-          const oppAPR = opp.apr !== undefined ? parseFloat(String(opp.apr)) : null;
-          const merklUrl = `https://app.merkl.xyz/chains/monad?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
-          
-          prompt += `- ${protocolId}: "${oppName}"${oppAPR !== null ? ` (APR: ${oppAPR.toFixed(2)}%)` : ''} [Merkl: ${merklUrl}]\n`;
-        }
-        if (grouped.lp.length > 10) {
-          prompt += `  ... and ${grouped.lp.length - 10} more LP pools\n`;
-        }
-      }
-      
-      // Lending Markets
-      if (grouped.lending.length > 0) {
-        prompt += `\n**Lending Markets** (${grouped.lending.length} markets) - Compare APR only (TVL Cost not applicable):\n`;
-        for (const opp of grouped.lending.slice(0, 10)) {
-          const protocolId = opp.mainProtocolId || opp.protocol?.id || 'unknown';
-          const oppName = opp.name || opp.opportunityId || 'Unknown';
-          const oppAPR = opp.apr !== undefined ? parseFloat(String(opp.apr)) : null;
-          const merklUrl = `https://app.merkl.xyz/chains/monad?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
-          
-          prompt += `- ${protocolId}: "${oppName}"${oppAPR !== null ? ` (APR: ${oppAPR.toFixed(2)}%)` : ''} [Merkl: ${merklUrl}]\n`;
-        }
-        if (grouped.lending.length > 10) {
-          prompt += `  ... and ${grouped.lending.length - 10} more lending markets\n`;
-        }
-      }
-      
-      // Borrowing (usually not relevant for LP comparison)
-      if (grouped.borrowing.length > 0) {
-        prompt += `\n**Borrowing Markets** (${grouped.borrowing.length} markets) - Not directly comparable to LP pools:\n`;
-        for (const opp of grouped.borrowing.slice(0, 5)) {
-          const protocolId = opp.mainProtocolId || opp.protocol?.id || 'unknown';
-          const oppName = opp.name || opp.opportunityId || 'Unknown';
-          const oppAPR = opp.apr !== undefined ? parseFloat(String(opp.apr)) : null;
-          const merklUrl = `https://app.merkl.xyz/chains/monad?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
-          
-          prompt += `- ${protocolId}: "${oppName}"${oppAPR !== null ? ` (APR: ${oppAPR.toFixed(2)}%)` : ''} [Merkl: ${merklUrl}]\n`;
-        }
-        if (grouped.borrowing.length > 5) {
-          prompt += `  ... and ${grouped.borrowing.length - 5} more borrowing markets\n`;
-        }
-      }
-      
-      prompt += `\n**Analysis Note**: When analyzing ${tokenPair} pools, compare LP pools against other LP pools (TVL Cost and APR). Lending markets can be compared by APR but serve different purposes.\n`;
-    }
-  }
-
-  if (previousWeek) {
-    prompt += `\n## Previous Week Comparison\n`;
-    prompt += `Previous week had ${previousWeek.pools.length} pools.\n`;
-    prompt += `**IMPORTANT**: When analyzing WoW changes, always check if incentives changed first.\n`;
-    prompt += `- If incentives dropped significantly, the WoW cost drop is likely due to lower incentives, not efficiency improvement\n`;
-    prompt += `- If incentives stayed similar but TVL Cost changed, then look for competitor campaigns or TVL shifts\n`;
-    prompt += `- Previous week incentives are shown above for each pool - use them in your analysis\n`;
-  }
-
-  // Add all campaigns context (vampire campaigns, competitive shifts)
-  if (allCampaigns && allCampaigns.length > 0) {
-    prompt += `\n## All Active Campaigns on Monad (Competitive Context)\n`;
-    prompt += `There are ${allCampaigns.length} total campaigns on Monad. This includes campaigns from protocols not in your selected list.\n`;
-    prompt += `**CRITICAL**: When explaining WoW changes or TVL shifts, you MUST identify SPECIFIC competing campaigns from this list.\n`;
-    prompt += `Do NOT just say "competitors" or "vampire campaigns" - name the specific protocol, funding protocol, and market.\n`;
-    prompt += `\nUse this to:\n`;
-    prompt += `- Identify SPECIFIC campaigns targeting the same assets/token pairs as pools with WoW increases\n`;
-    prompt += `- Find campaigns with higher incentives or better TVL Cost that might have attracted TVL\n`;
-    prompt += `- Identify new campaigns that started during the period\n`;
-    prompt += `- Find campaigns that ended (explaining why TVL might have shifted)\n`;
-    
-    // Group campaigns by token pair - OPTIMIZED: Single pass instead of 4 separate loops
-    const campaignsByTokenPair: Record<string, any[]> = {};
-    const allTokenPairs = new Set(currentWeek.pools.map(p => p.tokenPair.toLowerCase()));
-    let unknownCount = 0;
-    
-    for (const campaign of allCampaigns) {
-      const protocolId = campaign.mainProtocolId || campaign.protocol?.id || 'unknown';
-      
-      // Skip unknown campaigns entirely
-      if (protocolId === 'unknown') {
-        unknownCount++;
-        continue;
-      }
-      
-      // Extract token pair from opportunityId with regex
-      const oppId = (campaign.opportunityId || '').toLowerCase();
-      const match = oppId.match(/([a-z0-9]+)[-\/]([a-z0-9]+)/i);
-      const tokenPair = match ? `${match[1]}-${match[2]}`.toLowerCase() : null;
-      
-      // Only include if token pair matches current pools
-      if (tokenPair && allTokenPairs.has(tokenPair)) {
-        if (!campaignsByTokenPair[tokenPair]) {
-          campaignsByTokenPair[tokenPair] = [];
-        }
-        
-        const merklUrl = `https://app.merkl.xyz/chains/monad?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
-        
-        campaignsByTokenPair[tokenPair].push({
-          protocolId,
-          tokenPair,
-          merklUrl,
-        });
-      }
-    }
-    
-    const identifiableCampaigns = allCampaigns.length - unknownCount;
-    
-    prompt += `\n### Competing Campaigns by Token Pair:\n`;
-    if (unknownCount > 0) {
-      prompt += `**Note**: ${unknownCount} of ${allCampaigns.length} campaigns lack identifiable protocol data. Only ${identifiableCampaigns} campaigns with identifiable protocols are shown below.\n`;
-      prompt += `**For competitor identification, prioritize the "Example Opportunities" section which has structured data with APRs.**\n\n`;
-    }
-    prompt += `**Use this to identify SPECIFIC competitor campaigns when explaining WoW changes (only if internal factors don't explain the change).**\n\n`;
-    
-    // Show campaigns grouped by token pairs - SIMPLIFIED: Just protocol name and token pair
-    let hasIdentifiableCampaigns = false;
-    for (const tokenPair of Array.from(allTokenPairs).sort()) {
-      const campaigns = campaignsByTokenPair[tokenPair] || [];
-      if (campaigns.length > 0) {
-        hasIdentifiableCampaigns = true;
-        prompt += `\n**${tokenPair.toUpperCase()}** (${campaigns.length} competing campaigns):\n`;
-        for (const campaign of campaigns.slice(0, 15)) {
-          prompt += `- ${campaign.protocolId}: ${tokenPair} [Merkl: ${campaign.merklUrl}]\n`;
-        }
-        if (campaigns.length > 15) {
-          prompt += `  ... and ${campaigns.length - 15} more ${tokenPair} campaigns\n`;
-        }
-      }
-    }
-    
-    if (!hasIdentifiableCampaigns) {
-      prompt += `\n**No identifiable competing campaigns found for current token pairs.**\n`;
-    }
-  }
-
-  // Add all opportunities context (pools without incentives)
-  if (allOpportunities && allOpportunities.length > 0) {
-    prompt += `\n## All Pools/Markets on Monad (Full Competitive Landscape)\n`;
-    prompt += `There are ${allOpportunities.length} total opportunities (pools/markets) on Monad.\n`;
-    prompt += `This includes pools that DON'T have incentives. Use this to:\n`;
-    prompt += `- Identify the full competitive set for each token pair\n`;
-    prompt += `- Understand which pools are missing incentives (potential opportunities)\n`;
-    prompt += `- See the complete market landscape beyond just incentivized pools\n`;
-    
-    // Group opportunities by protocol
-    const opportunitiesByProtocol: Record<string, any[]> = {};
-    for (const opp of allOpportunities) {
-      const protocolId = opp.mainProtocolId || opp.protocol?.id || 'unknown';
-      if (!opportunitiesByProtocol[protocolId]) {
-        opportunitiesByProtocol[protocolId] = [];
-      }
-      opportunitiesByProtocol[protocolId].push(opp);
-    }
-    
-    prompt += `\n### Opportunities by Protocol:\n`;
-    for (const [protocolId, opportunities] of Object.entries(opportunitiesByProtocol)) {
-      prompt += `- ${protocolId}: ${opportunities.length} pools/markets\n`;
-    }
-    
-    // Identify pools without incentives
-    // Removed "Pools Without Incentives" section - AI can't analyze pools without data
-  }
-
-  prompt += `\n## Your Analysis Tasks
-
-1. **Key Findings**: List 3-5 most important findings about incentive efficiency.
-   - ONLY compare pools within the same asset type (MON vs MON, BTC vs BTC, etc.)
-   - Do NOT compare different asset types
-   - Reference expected ranges from the Asset Classification table above
-
-2. **Efficiency Issues**: For each pool, evaluate:
-   - Is TVL Cost within expected range for its asset type? (see table above)
-   - Flag pools exceeding expected range by >30% as "critical" severity
-   - Flag pools exceeding expected range by 10-30% as "high" severity
-   - Flag pools slightly above expected range (<10%) as "medium" severity
-   - Are there similar pools (same token pair, same asset type) with significantly different TVL Cost (>20% gap)?
-   - When comparing pools, reference examples from "Example Opportunities from Other Protocols" section
-   - Example: "Pool X (stablecoin-derivative) has 16.73% TVL Cost, which exceeds expected range (8-18%) and is 300% higher than similar pool Borrow USDT0 (4.19%)"
-
-3. **WoW Change Explanations**: ${canPerformWowAnalysis ? 'For each pool with WoW change >20% or <-20%:' : '**⚠️ SKIP THIS SECTION - Previous week data is missing. WoW analysis cannot be performed.**'}
-   ${canPerformWowAnalysis ? `
-   **STEP 1: Check Internal Factors FIRST (Incentive Efficiency & TVL Retention)**
-   - Calculate and compare:
-     * Incentive change WoW: (Current - Previous) / Previous × 100
-     * TVL change WoW: (Current - Previous) / Previous × 100
-   - **If incentives increased while TVL decreased**: Explain as "mechanical efficiency drop - incentives grew X% but TVL dropped Y%, pushing TVL Cost up"
-   - **If incentives decreased while TVL increased**: Explain as "efficiency improvement - incentives reduced X% while TVL grew Y%"
-   - **If incentives increased while TVL stayed flat**: Explain as "TVL Cost increase due to higher incentives (X% increase), not TVL loss"
-   - **If incentives stayed similar (±10%) but TVL dropped**: Then proceed to STEP 2
-   
-   **STEP 1.5: Verify Mechanical Math Matches Actual Change**
-   - Calculate expected TVL Cost change from incentive/TVL changes:
-     * Expected change ≈ (1 + incentive_change%) / (1 + tvl_change%) - 1
-     * Example: +6.7% incentives, -2.2% TVL → Expected: (1.067/0.978 - 1) ≈ +9.1% TVL Cost
-   - Compare expected vs actual WoW change:
-     * If difference < 5%: Internal factors fully explain the change (high confidence)
-     * If difference 5-15%: Internal factors partially explain (medium confidence, note discrepancy)
-     * If difference > 15%: Internal factors don't fully explain (proceed to STEP 2, note: "Actual change (X%) significantly exceeds mechanical effect (Y%). External factors likely involved.")
-   - Example: "Mechanical effect from +6.7% incentives and -2.2% TVL predicts ~+9.1% TVL Cost increase, but actual increase was +12.2%. The 3.1pp gap suggests additional factors beyond pure math."
-   
-   **STEP 2: Only If Internal Factors Don't Explain, Look for Competitors**
-   - Only if incentives were flat (±10%) but TVL dropped OR if mechanical change doesn't match actual change (>15% discrepancy), THEN identify SPECIFIC competitor pools:
-     * Find pools with the SAME token pair from "Similar Pools Comparison" or "Example Opportunities" sections
-     * Compare their APR (TVL Cost may not be available for competitors) - if another pool has higher APR, it may have attracted TVL
-     * Include competitorLinks array with Merkl URLs and APR (TVL Cost and incentives may not be available)
-     * Name the specific protocol, funding protocol, and market name
-   
-   - **Competitor Data Quality Checks**:
-     * If competitor APR differs by >50% from analyzed pool: Flag as "Competitor APR may reflect low TVL or data quality issues. Verify pool size before concluding TVL was stolen."
-     * If competitor APR differs by 30-50%: Note "Significant APR gap - investigate if competitor pool has comparable TVL or if high APR is due to small size"
-     * If competitor APR differs by <30%: "Moderate APR difference - likely competitive pressure"
-   - **Missing competitor metrics**: 
-     * If TVL not available: Note "Cannot verify if competitor APR is from large or small pool"
-     * If incentives not available: Note "Cannot compare incentive efficiency directly"
-   - Example: "Clober MON-USDC offers 85.89% APR vs Uniswap's 52.64% (63% higher). However, without Clober's TVL data, this may indicate a small pool with high APR rather than efficient incentive use. Recommend verifying Clober pool size before strategy changes."
-   
-   - **Note**: TVL Cost and incentives for competitor pools may not be available - compare by APR when TVL Cost unavailable
-   - Set confidence level based on:
-     * High: Internal math matches actual change within ±5% (internal factors fully explain)
-     * Medium: Internal math partially explains (5-15% discrepancy) OR identified competitors with APR but gaps remain
-     * Low: Internal math fails to explain (>15% discrepancy) AND no clear competitor identified
-   - Example format (internal factor): "TVL Cost increased 12.24% because incentives increased 6.7% while TVL dropped 2.2%, mechanically pushing up cost per TVL unit"
-   - Example format (competitor): "TVL Cost increased despite flat incentives because competitor pool Clober MON-USDC offers higher APR (86.06% vs 52.64%), attracting TVL away"` : ''}
-
-4. **Recommendations**: Provide specific, actionable recommendations based on findings.
-   
-   **Recommendation Templates by Scenario**:
-   
-   a) **TVL Cost within range, TVL declining**:
-      - "Monitor TVL trend over next 2 weeks. If decline continues, reduce incentives proportionally (e.g., if TVL drops 10%, reduce incentives 10% to maintain TVL Cost)"
-      - "Investigate root cause: Check if decline is pool-specific or market-wide across similar pools"
-   
-   b) **TVL Cost above expected range (>30% over)**:
-      - "Critical: Reduce incentives by X% to bring TVL Cost to Y% (top of expected range for [asset type])"
-      - Calculate X: Target TVL Cost = current TVL × (top of expected range) / current incentives annualized
-      - Example: "Reduce incentives from 2.6M MON to 2.1M MON to bring TVL Cost from 52.64% to 40% (top of MON pairs expected range)"
-   
-   c) **TVL Cost above range (10-30% over)**:
-      - "High priority: Reduce incentives by X% to reach midpoint of expected range"
-      - "If TVL growth is strategic goal, maintain current incentives but flag as inefficient spend"
-   
-   d) **Mechanical inefficiency (incentives grew, TVL didn't)**:
-      - "Incentives increased X% but TVL only grew Y% (or declined). Revert to previous incentive level until TVL response improves"
-      - Example: "Incentives grew 6.7% but TVL dropped 2.2%. Reduce back to 200K MON/week and investigate TVL retention issues"
-   
-   e) **Competitor with higher APR identified**:
-      - "Competitor [protocol] offers [X]% APR vs [Y]% (Z% gap). Options:"
-      - "Option 1: If competitor has comparable TVL, increase incentives by W% to match APR and recapture TVL"
-      - "Option 2: If competitor APR seems unsustainably high or pool is small, monitor for 1-2 weeks before responding"
-      - "Option 3: Investigate non-incentive factors (pool parameters, fee tiers, UX) that may explain TVL preference"
-      - Example: "Clober MON-USDC offers 85.89% APR (63% higher). Before increasing incentives, verify Clober's TVL size. If comparable, consider increasing from 2.6M to 3.5M MON/week to close APR gap. If Clober TVL is <$1M, monitor without action."
-   
-   f) **TVL Cost within range, no issues**:
-      - "Pool performing efficiently within expected range. Maintain current incentive levels."
-      - "Consider slight reduction (5-10%) to test price sensitivity if strategic goal is cost optimization"
-   
-   **Prioritization**:
-   - Critical severity issues: Address immediately (reduce incentives this week)
-   - High severity: Address within 1 week
-   - Medium severity: Monitor for 2 weeks, then adjust
-   - Low severity: Optional optimization opportunities
-   
-   **General Principles**:
-   - Always compare within the same asset type when benchmarking
-   - Reference specific competitor pools from "Example Opportunities" section
-   - Flag data quality concerns that limit recommendation confidence
-   - Provide specific numbers (incentive amounts, target TVL Cost) not just directional guidance
-
-Format your response as JSON with this structure:
-{
-  "dataQuality": {
-    "canPerformWowAnalysis": ${canPerformWowAnalysis},
-    "missingFields": ${hasPreviousWeek ? '[]' : '["previousIncentives", "previousTvl"]'},
-    "competitorDataCompleteness": ${allCampaigns ? parseFloat(campaignDataCompleteness) : 0},
-    "notes": "${canPerformWowAnalysis ? 'WoW analysis available for pools with previous data.' : 'Cannot perform WoW analysis - missing previous period data.'} ${allCampaigns && parseFloat(campaignDataCompleteness) < 50 ? 'Competitive analysis limited due to missing campaign data.' : ''}"
-  },
-  "keyFindings": ["finding1", "finding2", ...],
-  "efficiencyIssues": [
-    {
-      "poolId": "protocol-fundingProtocol-marketName",
-      "assetType": "stablecoin|stablecoin-derivative|mon-related|btc-related|lst-related|commodity-related|other",
-      "tvlCost": 14.03,
-      "expectedRange": [8, 18],
-      "status": "within_range|above_range|critical",
-      "issue": "description of issue",
-      "severity": "high|medium|low",
-      "recommendation": "specific recommendation",
-      "analysisConfidence": "high|medium|low"
-    }
-  ],
-  "wowExplanations": [
-    {
-      "poolId": "protocol-fundingProtocol-marketName",
-      "change": 15.5,
-      "mechanicalChange": 9.1,
-      "mechanicalExplanation": "Expected change from +6.7% incentives and -2.2% TVL: (1.067/0.978 - 1) ≈ +9.1%",
-      "discrepancy": 6.4,
-      "explanation": "full explanation including mechanical math and any additional factors",
-      "likelyCause": "competitor_pools|tvl_shift|new_pools|incentive_change|other",
-      "confidence": "high|medium|low",
-      "competitorLinks": [
-        {
-          "protocol": "competitor protocol name",
-          "marketName": "competitor market name",
-          "merklUrl": "https://app.merkl.xyz/chains/monad?search=...",
-          "apr": 45.5,
-          "tvlCost": 12.3,
-          "incentives": 350000,
-          "reason": "why this competitor is relevant (e.g., lower TVL Cost, higher incentives, higher APR). Include data quality warnings if APR differs by >30%."
-        }
-      ]
-    }
-  ],
-  "recommendations": ["recommendation1", "recommendation2", ...]
-}
-
-## Confidence Level Definitions
-- **HIGH**: Mechanical math matches actual change within ±5% (internal factors fully explain). Example: Expected +9.1%, actual +10.2% → High confidence.
-- **MEDIUM**: Mechanical math partially explains (5-15% discrepancy) OR identified competitors with APR but gaps remain. Example: Expected +9.1%, actual +15.5% → Medium confidence, investigate competitors.
-- **LOW**: Mechanical math fails to explain (>15% discrepancy) AND no clear competitor identified. Example: Expected +9.1%, actual +25.0% but no competitors found → Low confidence, data may be unreliable.
-
-## Important Notes
-- Always calculate mechanicalChange = (1 + incentive_change%) / (1 + tvl_change%) - 1
-- Always compare mechanicalChange vs actual change to detect discrepancies
-- Flag competitor APR differences >30% as potentially unreliable (may indicate small pool size)
-- Provide specific numbers in recommendations (incentive amounts, target TVL Cost percentages)
-`;
-
-  return prompt;
-}
 
 /**
  * Clean JSON text by removing common issues
@@ -1798,17 +1368,72 @@ function cleanJSON(jsonText: string): string {
  */
 function attemptJSONFix(jsonText: string, parseError: any): string | null {
   let fixed = jsonText;
-  
+  const errorMessage = parseError.message || '';
+
   try {
+    // Handle unterminated string errors specifically
+    if (errorMessage.includes('Unterminated string')) {
+      const position = extractErrorPosition(errorMessage);
+      if (position !== null && position < fixed.length) {
+        console.log(`Attempting to fix unterminated string at position ${position}`);
+
+        // Try to find the last complete opening brace and truncate there
+        let truncatePos = position;
+        let braceCount = 0;
+        let inString = false;
+        let lastValidPos = 0;
+
+        // Walk backwards to find a safe truncation point
+        for (let i = position - 1; i >= 0; i--) {
+          const char = fixed[i];
+
+          if (char === '"' && (i === 0 || fixed[i - 1] !== '\\')) {
+            inString = !inString;
+          }
+
+          if (!inString) {
+            if (char === '}' || char === ']') {
+              braceCount++;
+            } else if (char === '{' || char === '[') {
+              braceCount--;
+              if (braceCount < 0) {
+                lastValidPos = i;
+                break;
+              }
+            }
+          }
+        }
+
+        // Truncate at a safe point and try to close the JSON
+        if (lastValidPos > 0) {
+          fixed = fixed.substring(0, lastValidPos);
+          // Try to close any open structures
+          const openBraces = (fixed.match(/\{/g) || []).length - (fixed.match(/\}/g) || []).length;
+          const openBrackets = (fixed.match(/\[/g) || []).length - (fixed.match(/\]/g) || []).length;
+
+          // Remove trailing commas
+          fixed = fixed.replace(/,\s*$/, '');
+
+          // Close open structures
+          fixed += '}'.repeat(Math.max(0, openBraces));
+          fixed += ']'.repeat(Math.max(0, openBrackets));
+        } else {
+          // If we can't find a good truncation point, try closing the string
+          fixed = fixed.substring(0, position) + '"' + fixed.substring(position);
+        }
+      }
+    }
+
     // Try to fix trailing commas before closing braces/brackets
     fixed = fixed.replace(/,(\s*[}\]])/g, '$1');
-    
+
     // Try to fix unquoted keys (basic attempt - this is tricky)
     // Only fix if we can identify the pattern safely
     fixed = fixed.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
-    
+
     return fixed;
-  } catch {
+  } catch (error) {
+    console.warn('JSON fix attempt failed:', error instanceof Error ? error.message : 'Unknown error');
     return null;
   }
 }
@@ -1825,173 +1450,233 @@ function extractErrorPosition(errorMessage: string): number | null {
 }
 
 /**
- * Call Elfa AI API (or fallback to OpenAI/Anthropic if Elfa doesn't have direct LLM)
- * For now, we'll use a generic LLM API structure
+ * Extract context around error position for debugging
+ */
+function extractContextAroundError(jsonText: string, parseError: any): string {
+  const position = extractErrorPosition(parseError.message);
+  if (position === null) return 'Unable to determine error position';
+
+  const contextLength = 100;
+  const start = Math.max(0, position - contextLength);
+  const end = Math.min(jsonText.length, position + contextLength);
+
+  const before = jsonText.substring(start, position);
+  const after = jsonText.substring(position, end);
+
+  return `...${before}<<<ERROR HERE>>>${after}...`;
+}
+
+/**
+ * Call Grok (xAI) API for AI analysis
  */
 async function callGrokAI(prompt: string): Promise<any> {
-  // Check environment variables (re-read at runtime to ensure latest values)
   const xaiKey = process.env.XAI_API_KEY || process.env.GROK_API_KEY;
   
-  console.log('Environment check:', {
-    hasXAIKey: !!xaiKey,
-    xaiKeyPrefix: xaiKey ? xaiKey.substring(0, 10) + '...' : 'none',
+  if (!xaiKey) {
+    throw new Error('XAI_API_KEY or GROK_API_KEY environment variable is required when using Grok.');
+  }
+
+  console.log('Calling Grok (xAI) API...');
+  const response = await fetch(`${XAI_API_BASE}/responses`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${xaiKey}`,
+    },
+    body: JSON.stringify({
+      model: ANALYSIS_CONFIG.models.grok,
+      input: [
+        {
+          role: 'system',
+          content: 'You are an expert DeFi analyst specializing in incentive efficiency analysis. CRITICAL: You MUST respond with valid, parseable JSON only. Do not include any markdown formatting, code blocks, or explanatory text outside the JSON. The response must be pure JSON that can be parsed directly.',
+        },
+        {
+          role: 'user',
+          content: prompt + '\n\nIMPORTANT:\n1. Respond with ONLY valid JSON. Do not wrap it in markdown code blocks or add any text before or after the JSON.\n2. Keep explanations concise but informative (2-3 sentences each).\n3. Ensure all JSON strings are properly closed before the response ends.',
+        },
+      ],
+      max_tokens: 16384, // Increased token limit to prevent truncation
+    }),
   });
 
-  if (!xaiKey) {
-    throw new Error('XAI_API_KEY or GROK_API_KEY environment variable is required. Please add it to your .env.local file.');
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Grok API error: ${response.status} ${errorText}`);
   }
 
-  try {
-    console.log('Calling Grok (xAI) API...');
-    // Grok uses /responses endpoint with "input" instead of "messages"
-    const response = await fetch(`${XAI_API_BASE}/responses`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${xaiKey}`,
-      },
-        body: JSON.stringify({
-        model: 'grok-4-1-fast-reasoning', // Using reasoning model for better analysis
-        input: [
-          {
-            role: 'system',
-            content: 'You are an expert DeFi analyst specializing in incentive efficiency analysis. CRITICAL: You MUST respond with valid, parseable JSON only. Do not include any markdown formatting, code blocks, or explanatory text outside the JSON. The response must be pure JSON that can be parsed directly.',
-          },
-          {
-            role: 'user',
-            content: prompt + '\n\nIMPORTANT: Respond with ONLY valid JSON. Do not wrap it in markdown code blocks or add any text before or after the JSON.',
-          },
-        ],
-        // Grok supports structured outputs via schema, but for now we'll use JSON mode in the prompt
-      }),
-    });
+  const data = await response.json();
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Grok API error:', response.status, errorText);
-      throw new Error(`Grok API error: ${response.status} ${errorText}`);
-    }
+  // Check if response was truncated due to token limit (Grok API specific field may vary)
+  if (data.stop_reason === 'max_tokens' || data.finish_reason === 'length') {
+    console.warn('⚠️ Grok response was truncated due to max_tokens limit. Response may be incomplete.');
+  }
 
-    const data = await response.json();
-    console.log('Grok API success');
-    
-    // Grok response structure: data.output[0].content is an array of objects with { type: "output_text", text: "..." }
-    if (data.output && Array.isArray(data.output) && data.output.length > 0) {
-      const firstOutput = data.output[0];
-      
-      // Extract text from content array
-      if (firstOutput.content && Array.isArray(firstOutput.content) && firstOutput.content.length > 0) {
-        // Find the output_text content
-        const textContent = firstOutput.content.find((item: any) => item.type === 'output_text' && item.text);
-        
-        if (textContent && textContent.text) {
-          let jsonText = textContent.text;
-          console.log('Extracted JSON text, length:', jsonText.length);
-          
-          // Extract JSON from markdown code blocks if present
-          const jsonMatch = jsonText.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
-          if (jsonMatch) {
-            jsonText = jsonMatch[1];
-          }
-          
-          // Clean up common JSON issues
-          jsonText = cleanJSON(jsonText);
-          
-          try {
-            const parsed = JSON.parse(jsonText);
-            console.log('Successfully parsed JSON from Grok response');
-            return parsed;
-          } catch (parseError: any) {
-            console.error('Failed to parse JSON from text:', jsonText.substring(0, 1000));
-            console.error('Parse error at position:', parseError.message);
-            
-            // Try to fix common JSON issues and retry
-            const fixedJson = attemptJSONFix(jsonText, parseError);
-            if (fixedJson) {
-              try {
-                const parsed = JSON.parse(fixedJson);
-                console.log('Successfully parsed JSON after fix attempt');
-                return parsed;
-              } catch (retryError) {
-                console.error('Retry parse also failed');
-              }
-            }
-            
-            // Show more context around the error
-            const errorPosition = extractErrorPosition(parseError.message);
-            const contextStart = Math.max(0, (errorPosition || 0) - 200);
-            const contextEnd = Math.min(jsonText.length, (errorPosition || 0) + 200);
-            const errorContext = jsonText.substring(contextStart, contextEnd);
-            
-            // Try one retry with a request to fix JSON
-            console.log('Attempting retry with JSON fix request...');
-            try {
-              const retryResponse = await fetch(`${XAI_API_BASE}/responses`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${xaiKey}`,
-                },
-                body: JSON.stringify({
-                  model: 'grok-4-1-fast-reasoning',
-                  input: [
-                    {
-                      role: 'system',
-                      content: 'You are a JSON validator and fixer. Fix the provided JSON to make it valid and parseable.',
-                    },
-                    {
-                      role: 'user',
-                      content: `The following JSON has a syntax error at position ${errorPosition || 'unknown'}: ${parseError.message}\n\nPlease fix this JSON and return ONLY the corrected, valid JSON without any markdown or explanatory text:\n\n${jsonText}`,
-                    },
-                  ],
-                }),
-              });
-              
-              if (retryResponse.ok) {
-                const retryData = await retryResponse.json();
-                if (retryData.output && Array.isArray(retryData.output) && retryData.output.length > 0) {
-                  const retryContent = retryData.output[0].content;
-                  if (Array.isArray(retryContent) && retryContent.length > 0) {
-                    const retryText = retryContent.find((item: any) => item.type === 'output_text' && item.text)?.text;
-                    if (retryText) {
-                      const cleanedRetry = cleanJSON(retryText);
-                      const retryParsed = JSON.parse(cleanedRetry);
-                      console.log('Successfully parsed JSON after retry');
-                      return retryParsed;
-                    }
-                  }
-                }
-              }
-            } catch (retryError) {
-              console.error('Retry also failed:', retryError);
-            }
-            
-            throw new Error(`Failed to parse JSON response: ${parseError.message}. Error context: ${errorContext}`);
-          }
-        } else {
-          throw new Error('No output_text content found in Grok response');
-        }
-      } else {
-        // Fallback: try direct content access
-        const content = firstOutput.content || firstOutput.text || firstOutput.message;
-        if (typeof content === 'string') {
-          try {
-            return JSON.parse(content);
-          } catch (parseError: any) {
-            throw new Error(`Failed to parse JSON: ${parseError.message}`);
-          }
-        } else {
-          throw new Error(`Unexpected content structure: ${JSON.stringify(firstOutput).substring(0, 500)}`);
+  // Grok response: data.output[0].content[0].text
+  if (data.output?.[0]?.content?.[0]?.text) {
+    let jsonText = data.output[0].content[0].text;
+    const jsonMatch = jsonText.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
+    if (jsonMatch) jsonText = jsonMatch[1];
+    jsonText = cleanJSON(jsonText);
+
+    try {
+      return JSON.parse(jsonText);
+    } catch (parseError: any) {
+      console.error('Grok JSON parsing failed:', parseError.message);
+      console.error('Problematic JSON (first 500 chars):', jsonText.substring(0, 500));
+      console.error('Problematic JSON (around error position):', extractContextAroundError(jsonText, parseError));
+
+      // Check if this looks like a truncation issue
+      if (data.stop_reason === 'max_tokens' || data.finish_reason === 'length') {
+        console.error('❌ Response was truncated at token limit - this is likely the cause of the parse error');
+      }
+
+      const fixedJson = attemptJSONFix(jsonText, parseError);
+      if (fixedJson) {
+        try {
+          const parsed = JSON.parse(fixedJson);
+          console.log('✅ Successfully recovered from JSON error using fix logic');
+          return parsed;
+        } catch (error) {
+          console.warn('JSON parse retry failed:', error instanceof Error ? error.message : 'Unknown error');
         }
       }
-    } else {
-      console.error('Unexpected Grok API response structure:', JSON.stringify(data, null, 2));
-      throw new Error(`Unexpected Grok API response structure. Expected data.output array.`);
+      throw new Error(`Failed to parse Grok JSON: ${parseError.message}`);
     }
-  } catch (error: any) {
-    console.error('Grok API error:', error.message);
-    throw error;
   }
+
+  throw new Error('Unexpected Grok API response structure');
+}
+
+/**
+ * Call Claude (Anthropic) API for AI analysis
+ */
+async function callClaudeAI(prompt: string): Promise<any> {
+  const claudeKey = process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY;
+  
+  if (!claudeKey) {
+    throw new Error('CLAUDE_API_KEY or ANTHROPIC_API_KEY environment variable is required when using Claude.');
+  }
+
+  console.log('Calling Claude (Anthropic) API...');
+  const response = await fetch(`${CLAUDE_API_BASE}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': claudeKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: ANALYSIS_CONFIG.models.claude,
+      max_tokens: 16384, // Increased from 4096 to prevent truncation of complex analysis
+      messages: [
+        {
+          role: 'user',
+          content: `You are an expert DeFi analyst specializing in incentive efficiency analysis. CRITICAL: You MUST respond with valid, parseable JSON only. Do not include any markdown formatting, code blocks, or explanatory text outside the JSON. The response must be pure JSON that can be parsed directly.
+
+${prompt}
+
+IMPORTANT:
+1. Respond with ONLY valid JSON. Do not wrap it in markdown code blocks or add any text before or after the JSON.
+2. Keep explanations concise but informative (2-3 sentences each).
+3. Ensure all JSON strings are properly closed before the response ends.`,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Claude API error: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+
+  // Check if response was truncated due to token limit
+  if (data.stop_reason === 'max_tokens') {
+    console.warn('⚠️ Claude response was truncated due to max_tokens limit. Response may be incomplete.');
+  }
+
+  // Claude response: data.content[0].text
+  if (data.content?.[0]?.text) {
+    let jsonText = data.content[0].text;
+    const jsonMatch = jsonText.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
+    if (jsonMatch) jsonText = jsonMatch[1];
+    jsonText = cleanJSON(jsonText);
+
+    try {
+      return JSON.parse(jsonText);
+    } catch (parseError: any) {
+      console.error('Claude JSON parsing failed:', parseError.message);
+      console.error('Problematic JSON (first 500 chars):', jsonText.substring(0, 500));
+      console.error('Problematic JSON (around error position):', extractContextAroundError(jsonText, parseError));
+
+      // Check if this looks like a truncation issue
+      if (data.stop_reason === 'max_tokens') {
+        console.error('❌ Response was truncated at token limit - this is likely the cause of the parse error');
+      }
+
+      const fixedJson = attemptJSONFix(jsonText, parseError);
+      if (fixedJson) {
+        try {
+          const parsed = JSON.parse(fixedJson);
+          console.log('✅ Successfully recovered from JSON error using fix logic');
+          return parsed;
+        } catch (error) {
+          console.warn('JSON parse retry failed:', error instanceof Error ? error.message : 'Unknown error');
+        }
+      }
+      throw new Error(`Failed to parse Claude JSON: ${parseError.message}`);
+    }
+  }
+
+  throw new Error('Unexpected Claude API response structure');
+}
+
+/**
+ * Unified AI API caller with retry logic - automatically selects provider based on AI_PROVIDER env var
+ * Supports: 'grok' or 'claude' (defaults to 'claude')
+ */
+async function callAI(prompt: string, retries = 3): Promise<any> {
+  const provider = (process.env.AI_PROVIDER || 'claude').toLowerCase();
+
+  console.log(`Using AI provider: ${provider}`);
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      let result;
+      if (provider === 'grok') {
+        result = await callGrokAI(prompt);
+      } else {
+        result = await callClaudeAI(prompt);
+      }
+
+      // Validate the result has the expected structure
+      if (!result || typeof result !== 'object') {
+        throw new Error('Invalid AI response structure');
+      }
+
+      return result;
+    } catch (error: any) {
+      const errorMsg = error.message || 'Unknown error';
+      console.error(`AI call attempt ${attempt}/${retries} failed:`, errorMsg);
+
+      // If this is a JSON parsing error and we have retries left, try again
+      if (errorMsg.includes('Failed to parse') && attempt < retries) {
+        const backoffMs = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Exponential backoff: 1s, 2s, 4s (max 5s)
+        console.log(`Retrying in ${backoffMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        continue;
+      }
+
+      // If this is the last attempt or a non-retryable error, throw it
+      if (attempt === retries) {
+        // Add more context to the error
+        throw new Error(`AI analysis failed after ${retries} attempts: ${errorMsg}`);
+      }
+    }
+  }
+
+  throw new Error('AI analysis failed: Maximum retries exceeded');
 }
 
 // Old implementation removed - now using unified function via wrapper above
@@ -2023,12 +1708,12 @@ export async function POST(request: NextRequest) {
       console.log(prompt.substring(0, 1000) + '...');
       console.log('=== End Prompt ===');
 
-      // Call Grok AI
+      // Call AI (Grok or Claude based on AI_PROVIDER env var)
       let analysis;
       try {
-        analysis = await callGrokAI(prompt);
+        analysis = await callAI(prompt);
       } catch (aiError: any) {
-        console.error('Grok AI call failed:', aiError);
+        console.error('AI call failed:', aiError);
         throw aiError;
       }
 
@@ -2062,14 +1747,14 @@ export async function POST(request: NextRequest) {
     console.log(prompt.substring(0, 1000) + '...');
     console.log('=== End Prompt ===');
 
-    // Call Grok AI
-    let analysis;
-    try {
-      analysis = await callGrokAI(prompt);
-    } catch (aiError: any) {
-      console.error('Grok AI call failed:', aiError);
-      throw aiError;
-    }
+      // Call AI (Grok or Claude based on AI_PROVIDER env var)
+      let analysis;
+      try {
+        analysis = await callAI(prompt);
+      } catch (aiError: any) {
+        console.error('AI call failed:', aiError);
+        throw aiError;
+      }
 
     return NextResponse.json({
       success: true,

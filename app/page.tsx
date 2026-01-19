@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 interface MarketResult {
@@ -85,6 +85,32 @@ function HomeContent() {
   const [aiError, setAiError] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' | null }>({ key: null, direction: null });
   
+  // Memoized computed values
+  const periodDays = useMemo(() => {
+    if (!startDate || !endDate) return 0;
+    return Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  }, [startDate, endDate]);
+
+  const monPriceNum = useMemo(() => parseFloat(monPrice), [monPrice]);
+
+  // Memoized URL params
+  const urlParams = useMemo(() => {
+    const params = new URLSearchParams();
+    if (protocols.length > 0) {
+      params.set('protocols', protocols.join(','));
+    }
+    if (startDate) {
+      params.set('startDate', startDate);
+    }
+    if (endDate) {
+      params.set('endDate', endDate);
+    }
+    if (monPrice) {
+      params.set('monPrice', monPrice);
+    }
+    return params.toString();
+  }, [protocols, startDate, endDate, monPrice]);
+
   // Handle column sorting
   const handleSort = (key: string) => {
     setSortConfig(prev => {
@@ -127,27 +153,14 @@ function HomeContent() {
   useEffect(() => {
     if (!isInitialized) return;
     
-    const params = new URLSearchParams();
-    if (protocols.length > 0) {
-      params.set('protocols', protocols.join(','));
-    }
-    if (startDate) {
-      params.set('startDate', startDate);
-    }
-    if (endDate) {
-      params.set('endDate', endDate);
-    }
-    if (monPrice) {
-      params.set('monPrice', monPrice);
-    }
-    const newURL = params.toString() ? `?${params.toString()}` : '';
+    const newURL = urlParams ? `?${urlParams}` : '';
     
     // Only update URL if it's different from current URL to prevent loops
     const currentURL = window.location.search;
     if (currentURL !== newURL) {
       router.replace(newURL, { scroll: false });
     }
-  }, [protocols, startDate, endDate, monPrice, isInitialized, router]);
+  }, [urlParams, isInitialized, router]);
 
   const commonProtocols = [
     'clober',
@@ -242,202 +255,393 @@ function HomeContent() {
     return ((current - previous) / previous) * 100;
   };
 
-  // Generate tooltip content from AI analysis for a given pool
+  // Helper function to build tooltip text from explanation/issue
+  const buildTooltipText = (item: any, includeCompetitors: boolean = true): string => {
+    let tooltip = item.explanation || item.issue || '';
+    if (includeCompetitors && item.competitorLinks && item.competitorLinks.length > 0) {
+      tooltip += '\n\nCompeting pools:';
+      item.competitorLinks.forEach((competitor: any) => {
+        tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
+        if (competitor.reason) {
+          tooltip += ` (${competitor.reason})`;
+        }
+      });
+    }
+    if (item.recommendation) {
+      tooltip += `\n\n💡 ${item.recommendation}`;
+    }
+    return tooltip;
+  };
+
+  // Extract token pair and fee from market name for better matching
+  const extractTokenPairAndFee = (name: string): { tokenPair: string | null; fee: string | null } => {
+    const lowerName = name.toLowerCase();
+    const tokenPairMatch = lowerName.match(/([a-z0-9]+)-([a-z0-9]+)/);
+    const tokenPair = tokenPairMatch ? `${tokenPairMatch[1]}-${tokenPairMatch[2]}` : null;
+    const feeMatch = lowerName.match(/(\d+\.?\d*)%/);
+    const fee = feeMatch ? feeMatch[1] : null;
+    return { tokenPair, fee };
+  };
+
+  // Helper function to check if a poolId matches (flexible matching)
+  const matchesPoolId = (aiPoolId: string, normalizedPoolId: string, protocol: string, fundingProtocol: string, marketName: string): boolean => {
+    if (!aiPoolId) return false;
+    const aiNormalized = aiPoolId.toLowerCase();
+    if (aiNormalized === normalizedPoolId) return true;
+    
+    const aiParts = aiNormalized.split('-');
+    if (aiParts.length >= 3) {
+      const aiProtocol = aiParts[0];
+      const aiFunding = aiParts[1];
+      const aiMarket = aiParts.slice(2).join('-');
+      
+      if (aiProtocol === protocol && aiFunding === fundingProtocol) {
+        if (aiMarket === marketName || marketName.includes(aiMarket) || aiMarket.includes(marketName)) {
+          return true;
+        }
+        
+        const { tokenPair: ourTokenPair, fee: ourFee } = extractTokenPairAndFee(marketName);
+        const { tokenPair: aiTokenPair, fee: aiFee } = extractTokenPairAndFee(aiMarket);
+        if (ourTokenPair && aiTokenPair && ourTokenPair === aiTokenPair) {
+          if (!ourFee || !aiFee || ourFee === aiFee) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  };
+
+  // Helper function to check if a poolName matches our market name
+  const matchesPoolName = (poolName: string, marketName: string): boolean => {
+    if (!poolName) return false;
+    const normalizedName = poolName.toLowerCase();
+    if (normalizedName.includes(marketName.toLowerCase()) || marketName.toLowerCase().includes(normalizedName)) {
+      return true;
+    }
+    const { tokenPair: ourTokenPair, fee: ourFee } = extractTokenPairAndFee(marketName);
+    const { tokenPair: nameTokenPair, fee: nameFee } = extractTokenPairAndFee(normalizedName);
+    if (ourTokenPair && nameTokenPair && ourTokenPair === nameTokenPair) {
+      if (!ourFee || !nameFee || ourFee === nameFee) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Pre-build AI tooltip cache for O(1) lookup
+  const aiTooltipCache = useMemo(() => {
+    if (!aiAnalysis) return {};
+    
+    const cache: Record<string, Record<string, string>> = {};
+    
+    // Build cache for wowExplanations (pool-level WoW change explanations)
+    if (aiAnalysis.wowExplanations && Array.isArray(aiAnalysis.wowExplanations)) {
+      for (const exp of aiAnalysis.wowExplanations) {
+        if (!exp.poolId) continue;
+        const normalizedId = exp.poolId.toLowerCase();
+        const tooltipText = buildTooltipText(exp, true);
+        const poolIdParts = normalizedId.split('-');
+        
+        // Store for TVL Cost metrics (WoW explanations are primarily for TVL Cost)
+        // Only store volumeCostWoW if the explanation mentions volume/trading
+        const isVolumeRelated = tooltipText.toLowerCase().includes('volume') || 
+                                tooltipText.toLowerCase().includes('trading') ||
+                                tooltipText.toLowerCase().includes('volume cost');
+        
+        if (!cache[normalizedId]) cache[normalizedId] = {};
+        cache[normalizedId].tvlCostWoW = tooltipText;
+        cache[normalizedId].tvlCost = tooltipText; // WoW explanations also help understand current TVL cost
+        if (isVolumeRelated) {
+          cache[normalizedId].volumeCostWoW = tooltipText;
+        }
+        
+        if (poolIdParts.length >= 3) {
+          const protocol = poolIdParts[0];
+          const fundingProtocol = poolIdParts[1];
+          const marketName = poolIdParts.slice(2).join('-');
+          const marketNameLower = marketName.toLowerCase();
+          
+          // Store by protocol-fundingProtocol-marketName pattern for flexible matching
+          const flexibleKey = `${protocol}-${fundingProtocol}-${marketName}`;
+          if (!cache[flexibleKey]) cache[flexibleKey] = {};
+          cache[flexibleKey].tvlCostWoW = tooltipText;
+          cache[flexibleKey].tvlCost = tooltipText;
+          if (isVolumeRelated) {
+            cache[flexibleKey].volumeCostWoW = tooltipText;
+          }
+          
+          // Store by market name alone for protocol-level analysis matching
+          if (!cache[marketNameLower]) cache[marketNameLower] = {};
+          cache[marketNameLower].tvlCostWoW = tooltipText;
+          cache[marketNameLower].tvlCost = tooltipText;
+          if (isVolumeRelated) {
+            cache[marketNameLower].volumeCostWoW = tooltipText;
+          }
+          
+          // Also try storing by just protocol-marketName (without funding protocol) for broader matching
+          const protocolMarketKey = `${protocol}-${marketName}`;
+          if (!cache[protocolMarketKey]) cache[protocolMarketKey] = {};
+          cache[protocolMarketKey].tvlCostWoW = tooltipText;
+          cache[protocolMarketKey].tvlCost = tooltipText;
+          if (isVolumeRelated) {
+            cache[protocolMarketKey].volumeCostWoW = tooltipText;
+          }
+        }
+      }
+    }
+    
+    // Build cache for volumeCostWowExplanations (volume-specific WoW changes)
+    if (aiAnalysis.volumeCostWowExplanations && Array.isArray(aiAnalysis.volumeCostWowExplanations)) {
+      for (const volExp of aiAnalysis.volumeCostWowExplanations) {
+        if (!volExp.poolId) continue;
+        const normalizedId = volExp.poolId.toLowerCase();
+        const tooltipText = volExp.explanation || '';
+
+        if (!cache[normalizedId]) cache[normalizedId] = {};
+        cache[normalizedId].volumeCostWoW = tooltipText;
+        cache[normalizedId].volumeCost = tooltipText; // Also use for Volume Cost column
+
+        const poolIdParts = normalizedId.split('-');
+        if (poolIdParts.length >= 3) {
+          const protocol = poolIdParts[0];
+          const fundingProtocol = poolIdParts[1];
+          const marketName = poolIdParts.slice(2).join('-');
+          const marketNameLower = marketName.toLowerCase();
+
+          // Store by various key patterns
+          const flexibleKey = `${protocol}-${fundingProtocol}-${marketName}`;
+          if (!cache[flexibleKey]) cache[flexibleKey] = {};
+          cache[flexibleKey].volumeCostWoW = tooltipText;
+          cache[flexibleKey].volumeCost = tooltipText;
+
+          if (!cache[marketNameLower]) cache[marketNameLower] = {};
+          cache[marketNameLower].volumeCostWoW = tooltipText;
+          cache[marketNameLower].volumeCost = tooltipText;
+
+          const protocolMarketKey = `${protocol}-${marketName}`;
+          if (!cache[protocolMarketKey]) cache[protocolMarketKey] = {};
+          cache[protocolMarketKey].volumeCostWoW = tooltipText;
+          cache[protocolMarketKey].volumeCost = tooltipText;
+        }
+      }
+    }
+
+    // Build cache for efficiency issues
+    if (aiAnalysis.efficiencyIssues && Array.isArray(aiAnalysis.efficiencyIssues)) {
+      for (const issue of aiAnalysis.efficiencyIssues) {
+        if (!issue.poolId) continue;
+        const normalizedId = issue.poolId.toLowerCase();
+        const tooltipText = buildTooltipText(issue, false);
+        if (!cache[normalizedId]) cache[normalizedId] = {};
+        cache[normalizedId].tvlCost = tooltipText;
+
+        const poolIdParts = normalizedId.split('-');
+        if (poolIdParts.length >= 3) {
+          const protocol = poolIdParts[0];
+          const fundingProtocol = poolIdParts[1];
+          const marketName = poolIdParts.slice(2).join('-');
+          const flexibleKey = `${protocol}-${fundingProtocol}-${marketName}`;
+          if (!cache[flexibleKey]) cache[flexibleKey] = {};
+          cache[flexibleKey].tvlCost = tooltipText;
+        }
+      }
+    }
+    
+    // Build cache for protocol-level poolLevelWowAnalysis
+    if (aiAnalysis.protocolRecommendations && Array.isArray(aiAnalysis.protocolRecommendations)) {
+      for (const protocolRec of aiAnalysis.protocolRecommendations) {
+        const protocolLower = protocolRec.protocol?.toLowerCase();
+        
+        if (protocolRec.poolLevelWowAnalysis && Array.isArray(protocolRec.poolLevelWowAnalysis)) {
+          for (const wowAnalysis of protocolRec.poolLevelWowAnalysis) {
+            if (!wowAnalysis.poolName) continue;
+            const poolNameLower = wowAnalysis.poolName.toLowerCase();
+            const tooltipText = buildTooltipText(wowAnalysis, true);
+
+            // Check if this is volume-related analysis
+            const isVolumeRelated = tooltipText.toLowerCase().includes('volume') ||
+                                    tooltipText.toLowerCase().includes('trading') ||
+                                    tooltipText.toLowerCase().includes('volume cost');
+
+            // Store by pool name pattern (for direct matching)
+            if (!cache[poolNameLower]) cache[poolNameLower] = {};
+            cache[poolNameLower].tvlCostWoW = tooltipText;
+            cache[poolNameLower].tvlCost = tooltipText; // Also relevant for understanding current cost
+            if (isVolumeRelated) {
+              cache[poolNameLower].volumeCostWoW = tooltipText;
+            }
+
+            // Also store by protocol-poolName for protocol-specific matching
+            if (protocolLower) {
+              const protocolPoolKey = `${protocolLower}-${poolNameLower}`;
+              if (!cache[protocolPoolKey]) cache[protocolPoolKey] = {};
+              cache[protocolPoolKey].tvlCostWoW = tooltipText;
+              cache[protocolPoolKey].tvlCost = tooltipText;
+              if (isVolumeRelated) {
+                cache[protocolPoolKey].volumeCostWoW = tooltipText;
+              }
+            }
+
+            // Extract token pair for additional matching patterns
+            const { tokenPair } = extractTokenPairAndFee(poolNameLower);
+            if (tokenPair && protocolLower) {
+              // Store by protocol-tokenPair for token pair matching
+              const protocolTokenPairKey = `${protocolLower}-${tokenPair}`;
+              if (!cache[protocolTokenPairKey]) cache[protocolTokenPairKey] = {};
+              cache[protocolTokenPairKey].tvlCostWoW = tooltipText;
+              if (isVolumeRelated) {
+                cache[protocolTokenPairKey].volumeCostWoW = tooltipText;
+              }
+            }
+          }
+        }
+        
+        // Cache protocol-level key issues
+        if (protocolRec.keyIssues && Array.isArray(protocolRec.keyIssues)) {
+          const protocolLower = protocolRec.protocol?.toLowerCase();
+          if (protocolLower) {
+            for (const issue of protocolRec.keyIssues) {
+              const issueLower = issue.toLowerCase();
+              if (!cache[issueLower]) cache[issueLower] = {};
+              cache[issueLower].tvlCost = issue;
+            }
+          }
+        }
+      }
+    }
+    
+    return cache;
+  }, [aiAnalysis]);
+
+  // Generate tooltip content from AI analysis for a given pool (now uses cache)
   const getAITooltip = (poolId: string, metricType: 'tvlCost' | 'tvlCostWoW' | 'volumeCost' | 'volumeCostWoW'): string | null => {
     if (!aiAnalysis) return null;
 
     const normalizedPoolId = poolId.toLowerCase();
-    // Extract components from poolId: "protocol-fundingProtocol-marketName"
-    const poolIdParts = normalizedPoolId.split('-');
-    const protocol = poolIdParts[0];
-    const fundingProtocol = poolIdParts[1];
-    const marketName = poolIdParts.slice(2).join('-'); // Handle market names with dashes
-
-    // Extract token pair and fee from market name for better matching
-    // e.g., "Provide liquidity to UniswapV4 MON-USDC 0.05%" -> "MON-USDC" and "0.05%"
-    const extractTokenPairAndFee = (name: string): { tokenPair: string | null; fee: string | null } => {
-      const lowerName = name.toLowerCase();
-      // Try to extract token pair (e.g., "MON-USDC", "WBTC-WETH")
-      const tokenPairMatch = lowerName.match(/([a-z0-9]+)-([a-z0-9]+)/);
-      const tokenPair = tokenPairMatch ? `${tokenPairMatch[1]}-${tokenPairMatch[2]}` : null;
-      // Try to extract fee percentage (e.g., "0.05%", "0.0009%")
-      const feeMatch = lowerName.match(/(\d+\.?\d*)%/);
-      const fee = feeMatch ? feeMatch[1] : null;
-      return { tokenPair, fee };
-    };
-
-    const { tokenPair: ourTokenPair, fee: ourFee } = extractTokenPairAndFee(marketName);
-
-    // Helper function to check if a poolId matches (flexible matching)
-    const matchesPoolId = (aiPoolId: string): boolean => {
-      if (!aiPoolId) return false;
-      const aiNormalized = aiPoolId.toLowerCase();
-      // Exact match
-      if (aiNormalized === normalizedPoolId) return true;
-      
-      // Try matching by components (protocol-fundingProtocol-marketName)
-      const aiParts = aiNormalized.split('-');
-      if (aiParts.length >= 3) {
-        const aiProtocol = aiParts[0];
-        const aiFunding = aiParts[1];
-        const aiMarket = aiParts.slice(2).join('-');
-        
-        // Match if protocol and funding match
-        if (aiProtocol === protocol && aiFunding === fundingProtocol) {
-          // Try exact market name match
-          if (aiMarket === marketName || marketName.includes(aiMarket) || aiMarket.includes(marketName)) {
-            return true;
-          }
-          
-          // Try token pair + fee matching (for simplified AI poolIds like "MON-USDC-0.05%")
-          const { tokenPair: aiTokenPair, fee: aiFee } = extractTokenPairAndFee(aiMarket);
-          if (ourTokenPair && aiTokenPair && ourTokenPair === aiTokenPair) {
-            // If fees match or one is missing, consider it a match
-            if (!ourFee || !aiFee || ourFee === aiFee) {
-              return true;
-            }
-          }
-        }
-      }
-      return false;
-    };
-
-    // Helper function to check if a poolName matches our market name
-    const matchesPoolName = (poolName: string): boolean => {
-      if (!poolName) return false;
-      const normalizedName = poolName.toLowerCase();
-      // Direct substring match
-      if (normalizedName.includes(marketName.toLowerCase()) || marketName.toLowerCase().includes(normalizedName)) {
-        return true;
-      }
-      // Token pair + fee matching
-      const { tokenPair: nameTokenPair, fee: nameFee } = extractTokenPairAndFee(normalizedName);
-      if (ourTokenPair && nameTokenPair && ourTokenPair === nameTokenPair) {
-        if (!ourFee || !nameFee || ourFee === nameFee) {
-          return true;
-        }
-      }
-      return false;
-    };
-
-    // For TVL Cost: show efficiency issues OR WoW explanations if available
-    if (metricType === 'tvlCost') {
-      // First, check for WoW explanations (more relevant for understanding changes)
-      if (aiAnalysis.wowExplanations && Array.isArray(aiAnalysis.wowExplanations)) {
-        const explanation = aiAnalysis.wowExplanations.find((exp: any) => 
-          exp.poolId && matchesPoolId(exp.poolId)
-        );
-        if (explanation) {
-          let tooltip = explanation.explanation || '';
-          if (explanation.competitorLinks && explanation.competitorLinks.length > 0) {
-            tooltip += '\n\nCompeting pools:';
-            explanation.competitorLinks.forEach((competitor: any) => {
-              tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
-              if (competitor.reason) {
-                tooltip += ` (${competitor.reason})`;
-              }
-            });
-          }
-          return tooltip;
-        }
-      }
-      
-      // Then check pool-level efficiency issues
-      if (aiAnalysis.efficiencyIssues && Array.isArray(aiAnalysis.efficiencyIssues)) {
-        const issue = aiAnalysis.efficiencyIssues.find((issue: any) => 
-          issue.poolId && matchesPoolId(issue.poolId)
-        );
-        if (issue) {
-          return `${issue.issue}\n\n💡 ${issue.recommendation}`;
-        }
-      }
-      
-      // Check protocol-level efficiency issues (from protocolRecommendations)
-      if (aiAnalysis.protocolRecommendations && Array.isArray(aiAnalysis.protocolRecommendations)) {
-        for (const protocolRec of aiAnalysis.protocolRecommendations) {
-          if (protocolRec.protocol?.toLowerCase() === protocol) {
-            // Check if any key issues mention this pool
-            if (protocolRec.keyIssues && Array.isArray(protocolRec.keyIssues)) {
-              const relevantIssues = protocolRec.keyIssues.filter((issue: string) =>
-                issue.toLowerCase().includes(marketName.toLowerCase())
-              );
-              if (relevantIssues.length > 0) {
-                return relevantIssues.join('\n\n');
-              }
-            }
-          }
-        }
-      }
+    
+    // Try direct lookup first
+    if (aiTooltipCache[normalizedPoolId]?.[metricType]) {
+      return aiTooltipCache[normalizedPoolId][metricType];
     }
-
-    // For WoW Changes: show explanations
-    if (metricType === 'tvlCostWoW' || metricType === 'volumeCostWoW') {
-      // Check pool-level wowExplanations
-      if (aiAnalysis.wowExplanations && Array.isArray(aiAnalysis.wowExplanations)) {
-        // Debug: log all poolIds from AI
-        if (process.env.NODE_ENV === 'development') {
-          console.log('Looking for tooltip for poolId:', poolId);
-          console.log('Available AI poolIds:', aiAnalysis.wowExplanations.map((exp: any) => exp.poolId));
-        }
-        
-        const explanation = aiAnalysis.wowExplanations.find((exp: any) => {
-          if (!exp.poolId) return false;
-          const matches = matchesPoolId(exp.poolId);
-          if (process.env.NODE_ENV === 'development' && matches) {
-            console.log('Found matching explanation for:', exp.poolId);
-          }
-          return matches;
-        });
-        if (explanation) {
-          let tooltip = explanation.explanation || '';
-          if (explanation.competitorLinks && explanation.competitorLinks.length > 0) {
-            tooltip += '\n\nCompeting pools:';
-            explanation.competitorLinks.forEach((competitor: any) => {
-              tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
-              if (competitor.reason) {
-                tooltip += ` (${competitor.reason})`;
-              }
-            });
-          }
-          return tooltip;
-        }
+    
+    // Fallback to flexible matching for protocol-level analysis
+    const poolIdParts = normalizedPoolId.split('-');
+    if (poolIdParts.length >= 3) {
+      const protocol = poolIdParts[0];
+      const fundingProtocol = poolIdParts[1];
+      const marketName = poolIdParts.slice(2).join('-');
+      
+      const marketNameLower = marketName.toLowerCase();
+      
+      // Try flexible key (protocol-fundingProtocol-marketName)
+      const flexibleKey = `${protocol}-${fundingProtocol}-${marketName}`;
+      if (aiTooltipCache[flexibleKey]?.[metricType]) {
+        return aiTooltipCache[flexibleKey][metricType];
       }
       
-      // Check protocol-level poolLevelWowAnalysis
-      if (aiAnalysis.protocolRecommendations) {
+      // Try protocol-marketName (without funding protocol)
+      const protocolMarketKey = `${protocol}-${marketName}`;
+      if (aiTooltipCache[protocolMarketKey]?.[metricType]) {
+        return aiTooltipCache[protocolMarketKey][metricType];
+      }
+      
+      // Try matching by market name alone (for protocol-level analysis)
+      if (aiTooltipCache[marketNameLower]?.[metricType]) {
+        return aiTooltipCache[marketNameLower][metricType];
+      }
+      
+      // For TVL WoW metrics, check protocol-level poolLevelWowAnalysis with flexible matching
+      // Note: volumeCostWoW is handled separately below to ensure only volume-related content is shown
+      if ((metricType === 'tvlCostWoW' || metricType === 'tvlCost') && aiAnalysis.protocolRecommendations) {
         for (const protocolRec of aiAnalysis.protocolRecommendations) {
           if (protocolRec.protocol?.toLowerCase() === protocol && protocolRec.poolLevelWowAnalysis) {
-            const wowAnalysis = protocolRec.poolLevelWowAnalysis.find((analysis: any) =>
-              analysis.poolName && matchesPoolName(analysis.poolName)
-            );
-            if (wowAnalysis) {
-              let tooltip = wowAnalysis.explanation || '';
-              if (wowAnalysis.competitorLinks && wowAnalysis.competitorLinks.length > 0) {
-                tooltip += '\n\nCompeting pools:';
-                wowAnalysis.competitorLinks.forEach((competitor: any) => {
-                  tooltip += `\n• ${competitor.protocol} ${competitor.marketName}`;
-                  if (competitor.reason) {
-                    tooltip += ` (${competitor.reason})`;
-                  }
-                });
+            for (const wowAnalysis of protocolRec.poolLevelWowAnalysis) {
+              if (!wowAnalysis.poolName) continue;
+
+              const analysisPoolNameLower = wowAnalysis.poolName.toLowerCase();
+
+              // Try exact match first
+              if (analysisPoolNameLower === marketNameLower) {
+                return buildTooltipText(wowAnalysis, true);
               }
-              return tooltip;
+
+              // Try substring matching (flexible matching)
+              if (marketNameLower.includes(analysisPoolNameLower) || analysisPoolNameLower.includes(marketNameLower)) {
+                return buildTooltipText(wowAnalysis, true);
+              }
+
+              // Try matching by token pair extracted from market name
+              const { tokenPair: ourTokenPair } = extractTokenPairAndFee(marketNameLower);
+              const { tokenPair: analysisTokenPair } = extractTokenPairAndFee(analysisPoolNameLower);
+              if (ourTokenPair && analysisTokenPair && ourTokenPair === analysisTokenPair) {
+                return buildTooltipText(wowAnalysis, true);
+              }
             }
           }
         }
       }
-    }
 
-    // For Volume Cost: check if there are volume-related insights in key findings
-    if (metricType === 'volumeCost' && aiAnalysis.keyFindings) {
-      // Look for volume-related findings that might mention this pool
-      const volumeFindings = aiAnalysis.keyFindings.filter((finding: string) => 
-        finding.toLowerCase().includes('volume') && 
-        (finding.toLowerCase().includes(protocol) || 
-         finding.toLowerCase().includes(marketName.toLowerCase()))
-      );
-      if (volumeFindings.length > 0) {
-        return volumeFindings.join('\n\n');
+      // For TVL WoW metrics, also try partial matching on wowExplanations poolIds
+      // Note: volumeCostWoW is handled separately below to ensure only volume-related content is shown
+      if ((metricType === 'tvlCostWoW' || metricType === 'tvlCost') && aiAnalysis.wowExplanations) {
+        for (const exp of aiAnalysis.wowExplanations) {
+          if (!exp.poolId) continue;
+          const expPoolIdLower = exp.poolId.toLowerCase();
+          const expParts = expPoolIdLower.split('-');
+
+          // Check if market name matches any part of the explanation's poolId
+          if (expParts.length >= 3) {
+            const expMarketName = expParts.slice(2).join('-');
+            if (expMarketName === marketNameLower ||
+                marketNameLower.includes(expMarketName) ||
+                expMarketName.includes(marketNameLower)) {
+              return buildTooltipText(exp, true);
+            }
+          }
+        }
+      }
+      
+      // For volumeCost, check keyFindings and efficiencyIssues for volume-specific content
+      if (metricType === 'volumeCost' || metricType === 'volumeCostWoW') {
+        // First check keyFindings for volume-specific insights
+        if (aiAnalysis.keyFindings) {
+          const volumeFindings = aiAnalysis.keyFindings.filter((finding: string) => {
+            const findingLower = finding.toLowerCase();
+            return (findingLower.includes('volume') || findingLower.includes('trading') || findingLower.includes('volume cost')) && 
+                   (findingLower.includes(protocol) || findingLower.includes(marketNameLower));
+          });
+          if (volumeFindings.length > 0) {
+            return volumeFindings.join('\n\n');
+          }
+        }
+        
+        // Check efficiencyIssues for volume cost issues
+        if (aiAnalysis.efficiencyIssues) {
+          const volumeIssues = aiAnalysis.efficiencyIssues.filter((issue: any) => {
+            if (!issue.poolId) return false;
+            const issuePoolIdLower = issue.poolId.toLowerCase();
+            const issueParts = issuePoolIdLower.split('-');
+            if (issueParts.length >= 3) {
+              const issueMarketName = issueParts.slice(2).join('-').toLowerCase();
+              return issueMarketName === marketNameLower || 
+                     marketNameLower.includes(issueMarketName) ||
+                     issueMarketName.includes(marketNameLower);
+            }
+            return false;
+          }).filter((issue: any) => {
+            // Only include if the issue mentions volume
+            const issueText = (issue.issue || '').toLowerCase();
+            return issueText.includes('volume') || issueText.includes('trading') || issueText.includes('volume cost');
+          });
+          
+          if (volumeIssues.length > 0) {
+            return volumeIssues.map((issue: any) => buildTooltipText(issue, false)).join('\n\n');
+          }
+        }
+        
+        // Don't fall back to TVL cost explanations for volume cost - return null if no volume-specific content
+        return null;
       }
     }
 
@@ -695,36 +899,43 @@ function HomeContent() {
     const dateRangeFormatted = `${startDateFormatted} - ${endDateFormatted}`;
 
     const csvLines = [
-      `Platform Protocol,Funding Protocol,Market,Incentive,"TVL (as of ${endDateFormatted})","Volume (${dateRangeFormatted})"`
+      `Platform Protocol,Funding Protocol,Market,Incentive,"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
     ];
     
-    for (const platform of results) {
-      for (const funding of platform.fundingProtocols) {
-        for (const market of funding.markets) {
-          // Get per-market volume
-          const marketKey = `${platform.platformProtocol}-${market.marketName}`;
-          const marketVolume = marketVolumes[marketKey];
-          const volumeValue = marketVolume?.volumeInRange ?? marketVolume?.volume7d ?? marketVolume?.volume30d ?? null;
-          
-          // Format MON value - use toFixed to avoid commas in CSV
-          const monFormatted = market.totalMON.toFixed(2);
-          
-          // Format TVL value - use Merkl market-level TVL instead of protocol-level TVL
-          // Use toFixed to avoid commas in CSV
-          const tvlFormatted = market.tvl !== null && market.tvl !== undefined && market.tvl > 0
-            ? market.tvl.toFixed(2)
-            : '';
-          
-          // Format Volume value - use toFixed to avoid commas in CSV
-          const volumeFormatted = volumeValue !== null && volumeValue !== undefined
-            ? volumeValue.toFixed(2)
-            : '';
-          
-          csvLines.push(
-            `${platform.platformProtocol},${funding.fundingProtocol},"${market.marketName}",${monFormatted},"${tvlFormatted}","${volumeFormatted}"`
-          );
-        }
-      }
+    // Use processedTableRows to get all calculated values including TVL Cost, Volume Cost, and WoW changes
+    for (const row of processedTableRows) {
+      // Format MON value - use toFixed to avoid commas in CSV
+      const monFormatted = row.market.totalMON.toFixed(2);
+      
+      // Format TVL value - use Merkl market-level TVL
+      const tvlFormatted = row.market.tvl !== null && row.market.tvl !== undefined && row.market.tvl > 0
+        ? row.market.tvl.toFixed(2)
+        : '';
+      
+      // Format TVL Cost
+      const tvlCostFormatted = row.tvlCost !== null ? row.tvlCost.toFixed(2) : '';
+      
+      // Format TVL Cost WoW Change
+      const tvlCostWoWFormatted = row.wowChange !== null 
+        ? `${row.wowChange > 0 ? '+' : ''}${row.wowChange.toFixed(2)}`
+        : '';
+      
+      // Format Volume value
+      const volumeFormatted = row.volumeValue !== null && row.volumeValue !== undefined
+        ? row.volumeValue.toFixed(2)
+        : '';
+      
+      // Format Volume Cost
+      const volumeCostFormatted = row.volumeCost !== null ? row.volumeCost.toFixed(2) : '';
+      
+      // Format Volume Cost WoW Change
+      const volumeCostWoWFormatted = row.volumeWowChange !== null
+        ? `${row.volumeWowChange > 0 ? '+' : ''}${row.volumeWowChange.toFixed(2)}`
+        : '';
+      
+      csvLines.push(
+        `${row.platform.platformProtocol},${row.funding.fundingProtocol},"${row.market.marketName}",${monFormatted},"${tvlFormatted}","${tvlCostFormatted}","${tvlCostWoWFormatted}","${volumeFormatted}","${volumeCostFormatted}","${volumeCostWoWFormatted}"`
+      );
     }
 
     const csv = csvLines.join('\n');
@@ -737,9 +948,13 @@ function HomeContent() {
     window.URL.revokeObjectURL(url);
   };
 
-  const totalMON = results.reduce((sum, r) => sum + r.totalMON, 0);
-  const monPriceNum = parseFloat(monPrice);
-  const totalUSD = !isNaN(monPriceNum) && monPriceNum > 0 ? totalMON * monPriceNum : null;
+  const totalMON = useMemo(() => results.reduce((sum, r) => sum + r.totalMON, 0), [results]);
+  const totalUSD = useMemo(() => {
+    if (!isNaN(monPriceNum) && monPriceNum > 0) {
+      return totalMON * monPriceNum;
+    }
+    return null;
+  }, [totalMON, monPriceNum]);
 
   // Helper function to find previous week market data
   const findPreviousWeekMarket = (
@@ -762,6 +977,191 @@ function HomeContent() {
     );
     return prevMarket || null;
   };
+
+  // Memoized processed table rows - CRITICAL PERFORMANCE OPTIMIZATION
+  // This prevents recalculating all TVL costs, WoW changes, etc. on every render
+  const processedTableRows = useMemo(() => {
+    if (results.length === 0) return [];
+    
+    // Flatten all rows first
+    const allRows = results.flatMap((platform) => {
+      const protocolKey = platform.platformProtocol.toLowerCase();
+
+      return platform.fundingProtocols.flatMap((funding) =>
+        funding.markets.map((market, marketIdx) => {
+          // Get per-market volume from Dune
+          const marketKey = `${platform.platformProtocol}-${market.marketName}`;
+          const marketVolume = marketVolumes[marketKey];
+          const volumeValue = marketVolume?.volumeInRange ?? marketVolume?.volume7d ?? marketVolume?.volume30d ?? null;
+          const volumeError = marketVolume?.error;
+          const prevMarket = findPreviousWeekMarket(
+            platform.platformProtocol,
+            funding.fundingProtocol,
+            market.marketName
+          );
+          
+          // Calculate USD incentive
+          const incentiveUSD = !isNaN(monPriceNum) && monPriceNum > 0
+            ? market.totalMON * monPriceNum
+            : null;
+          
+          // Calculate TVL Cost (annualized incentives / TVL * 100)
+          const tvlCost = market.tvl && incentiveUSD
+            ? calculateTVLCost(incentiveUSD, market.tvl, periodDays)
+            : null;
+          
+          // Calculate previous week TVL Cost
+          const prevIncentiveUSD = prevMarket && !isNaN(monPriceNum) && monPriceNum > 0
+            ? prevMarket.totalMON * monPriceNum
+            : null;
+          const prevTVLCost = prevMarket?.tvl && prevIncentiveUSD
+            ? calculateTVLCost(prevIncentiveUSD, prevMarket.tvl, periodDays)
+            : null;
+          
+          // Calculate WoW Change for TVL Cost
+          const wowChange = calculateWoWChange(tvlCost, prevTVLCost);
+          
+          // Calculate Volume Cost (annualized incentives / volume * 100)
+          const volumeCost = volumeValue && incentiveUSD && !volumeError
+            ? calculateVolumeCost(incentiveUSD, volumeValue, periodDays)
+            : null;
+          
+          // Calculate previous week Volume Cost
+          const prevVolumeValue = prevMarket ? (() => {
+            const prevMarketKey = `${platform.platformProtocol}-${prevMarket.marketName}`;
+            const prevMarketVolume = previousWeekMarketVolumes[prevMarketKey];
+            return prevMarketVolume?.volumeInRange ?? prevMarketVolume?.volume7d ?? prevMarketVolume?.volume30d ?? null;
+          })() : null;
+          const prevVolumeError = prevMarket ? (() => {
+            const prevMarketKey = `${platform.platformProtocol}-${prevMarket.marketName}`;
+            const prevMarketVolume = previousWeekMarketVolumes[prevMarketKey];
+            return prevMarketVolume?.error;
+          })() : null;
+          const prevVolumeCost = prevVolumeValue && prevIncentiveUSD && !prevVolumeError
+            ? calculateVolumeCost(prevIncentiveUSD, prevVolumeValue, periodDays)
+            : null;
+          
+          // Calculate WoW Change for Volume Cost
+          const volumeWowChange = calculateWoWChange(volumeCost, prevVolumeCost);
+          
+          // Calculate percentage changes for display
+          const incentiveMONChange = prevMarket ? calculateWoWChange(market.totalMON, prevMarket.totalMON) : null;
+          const incentiveUSDChange = prevIncentiveUSD ? calculateWoWChange(incentiveUSD, prevIncentiveUSD) : null;
+          const tvlChange = (prevMarket?.tvl !== undefined && market.tvl !== undefined) ? calculateWoWChange(market.tvl ?? null, prevMarket.tvl ?? null) : null;
+          const volumeChange = prevVolumeValue ? calculateWoWChange(volumeValue, prevVolumeValue) : null;
+          
+          return {
+            platform,
+            funding,
+            market,
+            marketIdx,
+            protocolKey,
+            monPriceNum,
+            periodDays,
+            marketKey,
+            marketVolume,
+            volumeValue,
+            volumeError,
+            prevMarket,
+            incentiveUSD,
+            tvlCost,
+            prevIncentiveUSD,
+            prevTVLCost,
+            wowChange,
+            volumeCost,
+            prevVolumeValue,
+            prevVolumeError,
+            prevVolumeCost,
+            volumeWowChange,
+            incentiveMONChange,
+            incentiveUSDChange,
+            tvlChange,
+            volumeChange,
+          };
+        })
+      );
+    });
+
+    // Sort rows if sortConfig is set
+    if (sortConfig.key && sortConfig.direction) {
+      return [...allRows].sort((a, b) => {
+        let aValue: any;
+        let bValue: any;
+
+        switch (sortConfig.key) {
+          case 'protocol':
+            aValue = a.platform.platformProtocol.toLowerCase();
+            bValue = b.platform.platformProtocol.toLowerCase();
+            break;
+          case 'fundingProtocol':
+            aValue = a.funding.fundingProtocol.toLowerCase();
+            bValue = b.funding.fundingProtocol.toLowerCase();
+            break;
+          case 'market':
+            aValue = a.market.marketName.toLowerCase();
+            bValue = b.market.marketName.toLowerCase();
+            break;
+          case 'incentiveMON':
+            aValue = a.market.totalMON;
+            bValue = b.market.totalMON;
+            break;
+          case 'incentiveUSD':
+            aValue = a.incentiveUSD ?? 0;
+            bValue = b.incentiveUSD ?? 0;
+            break;
+          case 'period':
+            aValue = a.periodDays;
+            bValue = b.periodDays;
+            break;
+          case 'tvl':
+            aValue = a.market.tvl ?? 0;
+            bValue = b.market.tvl ?? 0;
+            break;
+          case 'tvlCost':
+            aValue = a.tvlCost ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            bValue = b.tvlCost ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            break;
+          case 'tvlCostWoW':
+            aValue = a.wowChange ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            bValue = b.wowChange ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            break;
+          case 'volume':
+            aValue = a.volumeValue ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            bValue = b.volumeValue ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            break;
+          case 'volumeCost':
+            aValue = a.volumeCost ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            bValue = b.volumeCost ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            break;
+          case 'volumeCostWoW':
+            aValue = a.volumeWowChange ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            bValue = b.volumeWowChange ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            break;
+          default:
+            return 0;
+        }
+
+        // Handle string comparison
+        if (typeof aValue === 'string' && typeof bValue === 'string') {
+          if (sortConfig.direction === 'asc') {
+            return aValue.localeCompare(bValue);
+          } else {
+            return bValue.localeCompare(aValue);
+          }
+        }
+
+        // Handle numeric comparison
+        if (sortConfig.direction === 'asc') {
+          return (aValue ?? 0) - (bValue ?? 0);
+        } else {
+          return (bValue ?? 0) - (aValue ?? 0);
+        }
+      });
+    }
+    
+    return allRows;
+  }, [results, previousWeekResults, monPriceNum, periodDays, sortConfig, 
+      marketVolumes, previousWeekMarketVolumes]);
 
   // Prepare data for AI analysis
   const prepareAIData = () => {
@@ -978,9 +1378,18 @@ function HomeContent() {
       }
 
       setAiAnalysis(data.analysis);
+      setAiError(''); // Clear any previous errors on success
     } catch (err: any) {
       console.error('AI Analysis error:', err);
-      const errorMsg = err.message || err.toString() || 'An error occurred during AI analysis';
+      let errorMsg = err.message || err.toString() || 'An error occurred during AI analysis';
+
+      // Make JSON parsing errors more user-friendly
+      if (errorMsg.includes('Failed to parse') && errorMsg.includes('JSON')) {
+        errorMsg = 'The AI service returned an incomplete response. This is usually temporary - please try again in a moment. If the issue persists, the AI service may be experiencing high load.';
+      } else if (errorMsg.includes('Maximum retries exceeded')) {
+        errorMsg = 'AI analysis failed after multiple attempts. Please wait a moment and try again.';
+      }
+
       setAiError(errorMsg);
     } finally {
       setAiLoading(false);
@@ -1352,7 +1761,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           The DeFi protocol/platform where the liquidity pool exists (e.g., Uniswap, Curve, PancakeSwap)
                         </div>
                       </div>
@@ -1367,7 +1776,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           The protocol that provided the MON incentives for this pool (e.g., Upshift, Townsquare)
                         </div>
                       </div>
@@ -1382,7 +1791,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           The specific liquidity pool/market name. Click to view on Merkl.
                         </div>
                       </div>
@@ -1397,7 +1806,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Total MON tokens distributed as incentives during the selected date range. Calculated from Merkl campaign daily rewards converted to MON using token price. Percentage shown compares to the value from 7 days ago.
                         </div>
                       </div>
@@ -1413,7 +1822,7 @@ function HomeContent() {
                               </span>
                             )}
                           </button>
-                          <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                          <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                             USD value of MON incentives. Calculated as: Incentive (MON) × MON Price. Percentage shown compares to the value from 7 days ago.
                           </div>
                         </div>
@@ -1429,7 +1838,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Number of days in the selected date range (inclusive of start and end dates)
                         </div>
                       </div>
@@ -1444,8 +1853,8 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
-                          Total Value Locked in the pool as of the end date. Historical TVL from Merkl campaign metrics, or current TVL if historical data unavailable. Percentage shown compares to the value from 7 days ago.
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
+                          Total Value Locked in the pool as of the end date. Historical TVL from Merkl campaign metrics. Percentage shown compares to the value from 7 days ago.
                         </div>
                       </div>
                     </th>
@@ -1459,7 +1868,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Annualized cost to attract TVL. Formula: (Incentives annualized / TVL) × 100. Lower is better. Red: &gt;50%, Yellow: &gt;20%, Green: ≤20%
                         </div>
                       </div>
@@ -1474,7 +1883,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Week-over-week percentage change in TVL Cost. Negative (green) is better (cost decreased). Red: &gt;10% increase, Green: &lt;-10% decrease
                         </div>
                       </div>
@@ -1489,7 +1898,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Trading volume for this specific pool during the date range. Fetched from Dune Analytics (Monad-specific). Shows "Not Found" if data unavailable.
                         </div>
                       </div>
@@ -1504,7 +1913,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Annualized cost per volume. Formula: (Incentives annualized / Volume) × 100. Lower is better. Shows "-" for lending protocols or when volume unavailable.
                         </div>
                       </div>
@@ -1519,7 +1928,7 @@ function HomeContent() {
                             </span>
                           )}
                         </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-right">
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Week-over-week percentage change in Volume Cost. Negative (green) is better (cost decreased). Red: &gt;10% increase, Green: &lt;-10% decrease. Shows "-" when volume unavailable.
                         </div>
                       </div>
@@ -1527,188 +1936,7 @@ function HomeContent() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(() => {
-                    // Flatten all rows first
-                    const allRows = results.flatMap((platform) => {
-                      const protocolKey = platform.platformProtocol.toLowerCase();
-                      const monPriceNum = parseFloat(monPrice);
-                      const periodDays = Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
-
-                      return platform.fundingProtocols.flatMap((funding) =>
-                        funding.markets.map((market, marketIdx) => {
-                        // Get per-market volume from Dune
-                        const marketKey = `${platform.platformProtocol}-${market.marketName}`;
-                        const marketVolume = marketVolumes[marketKey];
-                        const volumeValue = marketVolume?.volumeInRange ?? marketVolume?.volume7d ?? marketVolume?.volume30d ?? null;
-                        const volumeError = marketVolume?.error;
-                        const prevMarket = findPreviousWeekMarket(
-                          platform.platformProtocol,
-                          funding.fundingProtocol,
-                          market.marketName
-                        );
-                        
-                        // Calculate USD incentive
-                        const incentiveUSD = !isNaN(monPriceNum) && monPriceNum > 0
-                          ? market.totalMON * monPriceNum
-                          : null;
-                        
-                        // Calculate TVL Cost (annualized incentives / TVL * 100)
-                        const tvlCost = market.tvl && incentiveUSD
-                          ? calculateTVLCost(incentiveUSD, market.tvl, periodDays)
-                          : null;
-                        
-                        // Calculate previous week TVL Cost
-                        const prevIncentiveUSD = prevMarket && !isNaN(monPriceNum) && monPriceNum > 0
-                          ? prevMarket.totalMON * monPriceNum
-                          : null;
-                        const prevTVLCost = prevMarket?.tvl && prevIncentiveUSD
-                          ? calculateTVLCost(prevIncentiveUSD, prevMarket.tvl, periodDays)
-                          : null;
-                        
-                        // Calculate WoW Change for TVL Cost
-                        const wowChange = calculateWoWChange(tvlCost, prevTVLCost);
-                        
-                        // Calculate Volume Cost (annualized incentives / volume * 100)
-                        const volumeCost = volumeValue && incentiveUSD && !volumeError
-                          ? calculateVolumeCost(incentiveUSD, volumeValue, periodDays)
-                          : null;
-                        
-                        // Calculate previous week Volume Cost
-                        const prevVolumeValue = prevMarket ? (() => {
-                          const prevMarketKey = `${platform.platformProtocol}-${prevMarket.marketName}`;
-                          const prevMarketVolume = previousWeekMarketVolumes[prevMarketKey];
-                          return prevMarketVolume?.volumeInRange ?? prevMarketVolume?.volume7d ?? prevMarketVolume?.volume30d ?? null;
-                        })() : null;
-                        const prevVolumeError = prevMarket ? (() => {
-                          const prevMarketKey = `${platform.platformProtocol}-${prevMarket.marketName}`;
-                          const prevMarketVolume = previousWeekMarketVolumes[prevMarketKey];
-                          return prevMarketVolume?.error;
-                        })() : null;
-                        const prevVolumeCost = prevVolumeValue && prevIncentiveUSD && !prevVolumeError
-                          ? calculateVolumeCost(prevIncentiveUSD, prevVolumeValue, periodDays)
-                          : null;
-                        
-                        // Calculate WoW Change for Volume Cost
-                        const volumeWowChange = calculateWoWChange(volumeCost, prevVolumeCost);
-                        
-                        // Calculate percentage changes for display
-                        const incentiveMONChange = prevMarket ? calculateWoWChange(market.totalMON, prevMarket.totalMON) : null;
-                        const incentiveUSDChange = prevIncentiveUSD ? calculateWoWChange(incentiveUSD, prevIncentiveUSD) : null;
-                        const tvlChange = (prevMarket?.tvl !== undefined && market.tvl !== undefined) ? calculateWoWChange(market.tvl ?? null, prevMarket.tvl ?? null) : null;
-                        const volumeChange = prevVolumeValue ? calculateWoWChange(volumeValue, prevVolumeValue) : null;
-                        
-                        return {
-                          platform,
-                          funding,
-                          market,
-                          marketIdx,
-                          protocolKey,
-                          monPriceNum,
-                          periodDays,
-                          marketKey,
-                          marketVolume,
-                          volumeValue,
-                          volumeError,
-                          prevMarket,
-                          incentiveUSD,
-                          tvlCost,
-                          prevIncentiveUSD,
-                          prevTVLCost,
-                          wowChange,
-                          volumeCost,
-                          prevVolumeValue,
-                          prevVolumeError,
-                          prevVolumeCost,
-                          volumeWowChange,
-                          incentiveMONChange,
-                          incentiveUSDChange,
-                          tvlChange,
-                          volumeChange,
-                        };
-                      })
-                    );
-                  });
-
-                    // Sort rows if sortConfig is set
-                    let sortedRows = allRows;
-                    if (sortConfig.key && sortConfig.direction) {
-                      sortedRows = [...allRows].sort((a, b) => {
-                        let aValue: any;
-                        let bValue: any;
-
-                        switch (sortConfig.key) {
-                          case 'protocol':
-                            aValue = a.platform.platformProtocol.toLowerCase();
-                            bValue = b.platform.platformProtocol.toLowerCase();
-                            break;
-                          case 'fundingProtocol':
-                            aValue = a.funding.fundingProtocol.toLowerCase();
-                            bValue = b.funding.fundingProtocol.toLowerCase();
-                            break;
-                          case 'market':
-                            aValue = a.market.marketName.toLowerCase();
-                            bValue = b.market.marketName.toLowerCase();
-                            break;
-                          case 'incentiveMON':
-                            aValue = a.market.totalMON;
-                            bValue = b.market.totalMON;
-                            break;
-                          case 'incentiveUSD':
-                            aValue = a.incentiveUSD ?? 0;
-                            bValue = b.incentiveUSD ?? 0;
-                            break;
-                          case 'period':
-                            aValue = a.periodDays;
-                            bValue = b.periodDays;
-                            break;
-                          case 'tvl':
-                            aValue = a.market.tvl ?? 0;
-                            bValue = b.market.tvl ?? 0;
-                            break;
-                          case 'tvlCost':
-                            aValue = a.tvlCost ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            bValue = b.tvlCost ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            break;
-                          case 'tvlCostWoW':
-                            aValue = a.wowChange ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            bValue = b.wowChange ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            break;
-                          case 'volume':
-                            aValue = a.volumeValue ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            bValue = b.volumeValue ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            break;
-                          case 'volumeCost':
-                            aValue = a.volumeCost ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            bValue = b.volumeCost ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            break;
-                          case 'volumeCostWoW':
-                            aValue = a.volumeWowChange ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            bValue = b.volumeWowChange ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
-                            break;
-                          default:
-                            return 0;
-                        }
-
-                        // Handle string comparison
-                        if (typeof aValue === 'string' && typeof bValue === 'string') {
-                          if (sortConfig.direction === 'asc') {
-                            return aValue.localeCompare(bValue);
-                          } else {
-                            return bValue.localeCompare(aValue);
-                          }
-                        }
-
-                        // Handle numeric comparison
-                        if (sortConfig.direction === 'asc') {
-                          return (aValue ?? 0) - (bValue ?? 0);
-                        } else {
-                          return (bValue ?? 0) - (aValue ?? 0);
-                        }
-                      });
-                    }
-
-                    // Render sorted rows
-                    return sortedRows.map((row) => (
+                  {processedTableRows.map((row) => (
                       <tr key={`${row.platform.platformProtocol}-${row.funding.fundingProtocol}-${row.marketIdx}`} className="border-b border-gray-800 hover:bg-gray-800/30">
                             <td className="py-3 px-4 text-sm text-white capitalize">{row.platform.platformProtocol.replace('-', ' ')}</td>
                             <td className="py-3 px-4 text-sm text-gray-300 capitalize">{row.funding.fundingProtocol.replace('-', ' ')}</td>
@@ -1785,7 +2013,7 @@ function HomeContent() {
                                       <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
                                         {content}
                                       </span>
-                                      <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left">
+                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] max-w-md w-96 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left max-h-96 overflow-y-auto">
                                         {tooltip}
                                       </div>
                                     </div>
@@ -1808,7 +2036,7 @@ function HomeContent() {
                                       <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
                                         {content}
                                       </span>
-                                      <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left">
+                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] max-w-md w-96 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left max-h-96 overflow-y-auto">
                                         {tooltip}
                                       </div>
                                     </div>
@@ -1850,7 +2078,7 @@ function HomeContent() {
                                       <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
                                         {content}
                                       </span>
-                                      <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left">
+                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] max-w-md w-96 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left max-h-96 overflow-y-auto">
                                         {tooltip}
                                       </div>
                                     </div>
@@ -1873,7 +2101,7 @@ function HomeContent() {
                                       <span className="underline decoration-dotted decoration-purple-400/50 hover:decoration-purple-400">
                                         {content}
                                       </span>
-                                      <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-[9999] w-80 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left">
+                                      <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] max-w-md w-96 p-3 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-pre-line normal-case text-left max-h-96 overflow-y-auto">
                                         {tooltip}
                                       </div>
                                     </div>
@@ -1883,8 +2111,7 @@ function HomeContent() {
                               })()}
                             </td>
                           </tr>
-                    ));
-                  })()}
+                    ))}
                 </tbody>
               </table>
             </div>
@@ -2040,7 +2267,14 @@ function HomeContent() {
                                 {market.apr !== undefined && (
                                   <span 
                                     className="text-xs text-purple-400 font-semibold bg-purple-500/10 px-2 py-0.5 rounded cursor-help flex-shrink-0"
-                                    title="APR (Annual Percentage Rate) represents the annualized return from Merkl incentives. This value shows the APR at the end of your selected date range, calculated from campaign metrics. APR = (Daily Rewards / TVL) × 365 × 100"
+                                    title={(() => {
+                                      const poolId = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`;
+                                      const tooltip = getAITooltip(poolId, 'tvlCost');
+                                      if (tooltip) {
+                                        return `APR (Annual Percentage Rate) represents the annualized return from Merkl incentives. This value shows the APR at the end of your selected date range, calculated from campaign metrics. APR = (Daily Rewards / TVL) × 365 × 100\n\nAI Analysis:\n${tooltip}`;
+                                      }
+                                      return "APR (Annual Percentage Rate) represents the annualized return from Merkl incentives. This value shows the APR at the end of your selected date range, calculated from campaign metrics. APR = (Daily Rewards / TVL) × 365 × 100";
+                                    })()}
                                   >
                                     {market.apr.toFixed(2)}% APR
                                   </span>
@@ -2048,7 +2282,14 @@ function HomeContent() {
                                 {market.tvl !== undefined && (
                                   <span 
                                     className="text-xs text-blue-400 font-semibold bg-blue-500/10 px-2 py-0.5 rounded cursor-help flex-shrink-0"
-                                    title="TVL (Total Value Locked) shows the total value locked in this market at the end of your selected date range, in USD"
+                                    title={(() => {
+                                      const poolId = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`;
+                                      const tooltip = getAITooltip(poolId, 'tvlCostWoW');
+                                      if (tooltip) {
+                                        return `TVL (Total Value Locked) shows the total value locked in this market at the end of your selected date range, in USD\n\nWoW Change Explanation:\n${tooltip}`;
+                                      }
+                                      return "TVL (Total Value Locked) shows the total value locked in this market at the end of your selected date range, in USD";
+                                    })()}
                                   >
                                     {market.tvl >= 1000000 
                                       ? `$${(market.tvl / 1000000).toFixed(2)}M TVL`
