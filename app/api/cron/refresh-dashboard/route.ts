@@ -76,6 +76,25 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Construct base URL for internal API calls
+    // Priority: VERCEL_URL env var > NEXT_PUBLIC_BASE_URL > construct from request headers
+    let baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}`
+      : process.env.NEXT_PUBLIC_BASE_URL;
+    
+    if (!baseUrl) {
+      // Try to construct from request URL
+      try {
+        const url = new URL(request.url);
+        baseUrl = `${url.protocol}//${url.host}`;
+      } catch {
+        // Fallback to localhost for local development
+        baseUrl = 'http://localhost:3000';
+      }
+    }
+
+    console.log('[Cron] Using base URL:', baseUrl);
+
     // Calculate dates
     const yesterday = getYesterdayUTC();
     const sevenDaysAgo = getSevenDaysAgoUTC();
@@ -88,59 +107,91 @@ export async function GET(request: Request) {
     console.log('[Cron] MON price:', monPrice);
 
     // Fetch current week data
-    const [monSpentResponse, tvlResponse] = await Promise.all([
-      fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/query-mon-spent`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocols: commonProtocols,
-          startDate: sevenDaysAgo,
-          endDate: yesterday,
-          token: 'WMON',
+    let monSpentResponse, tvlResponse;
+    try {
+      [monSpentResponse, tvlResponse] = await Promise.all([
+        fetch(`${baseUrl}/api/query-mon-spent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: sevenDaysAgo,
+            endDate: yesterday,
+            token: 'WMON',
+          }),
         }),
-      }),
-      fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/protocol-tvl`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocols: commonProtocols,
-          startDate: sevenDaysAgo,
-          endDate: yesterday,
+        fetch(`${baseUrl}/api/protocol-tvl`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: sevenDaysAgo,
+            endDate: yesterday,
+          }),
         }),
-      }),
-    ]);
+      ]);
+    } catch (fetchError: any) {
+      console.error('[Cron] Fetch error:', fetchError);
+      throw new Error(`Failed to fetch data from ${baseUrl}: ${fetchError.message || 'Unknown error'}`);
+    }
+
+    if (!monSpentResponse.ok) {
+      const errorText = await monSpentResponse.text();
+      console.error('[Cron] MON spent fetch failed:', monSpentResponse.status, errorText);
+      throw new Error(`Failed to fetch MON spent data: ${monSpentResponse.status} - ${errorText}`);
+    }
+
+    if (!tvlResponse.ok) {
+      const errorText = await tvlResponse.text();
+      console.error('[Cron] TVL fetch failed:', tvlResponse.status, errorText);
+      throw new Error(`Failed to fetch TVL data: ${tvlResponse.status} - ${errorText}`);
+    }
 
     const monSpentData = await monSpentResponse.json();
     const tvlData = await tvlResponse.json();
 
-    if (!monSpentResponse.ok) {
-      throw new Error(monSpentData.error || 'Failed to fetch MON spent data');
-    }
-
     console.log('[Cron] Current week data fetched, results:', monSpentData.results?.length || 0);
 
     // Fetch previous week data
-    const [prevMonSpentResponse, prevTvlResponse] = await Promise.all([
-      fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/query-mon-spent`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocols: commonProtocols,
-          startDate: prevStartDate,
-          endDate: prevEndDate,
-          token: 'WMON',
+    let prevMonSpentResponse, prevTvlResponse;
+    try {
+      [prevMonSpentResponse, prevTvlResponse] = await Promise.all([
+        fetch(`${baseUrl}/api/query-mon-spent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+            token: 'WMON',
+          }),
         }),
-      }),
-      fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/protocol-tvl`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocols: commonProtocols,
-          startDate: prevStartDate,
-          endDate: prevEndDate,
+        fetch(`${baseUrl}/api/protocol-tvl`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+          }),
         }),
-      }),
-    ]);
+      ]);
+    } catch (fetchError: any) {
+      console.error('[Cron] Previous week fetch error:', fetchError);
+      throw new Error(`Failed to fetch previous week data from ${baseUrl}: ${fetchError.message || 'Unknown error'}`);
+    }
+
+    if (!prevMonSpentResponse.ok) {
+      const errorText = await prevMonSpentResponse.text();
+      console.error('[Cron] Previous week MON spent fetch failed:', prevMonSpentResponse.status, errorText);
+      throw new Error(`Failed to fetch previous week MON spent data: ${prevMonSpentResponse.status} - ${errorText}`);
+    }
+
+    if (!prevTvlResponse.ok) {
+      const errorText = await prevTvlResponse.text();
+      console.error('[Cron] Previous week TVL fetch failed:', prevTvlResponse.status, errorText);
+      throw new Error(`Failed to fetch previous week TVL data: ${prevTvlResponse.status} - ${errorText}`);
+    }
 
     const prevMonSpentData = await prevMonSpentResponse.json();
     const prevTvlData = await prevTvlResponse.json();
@@ -154,7 +205,7 @@ export async function GET(request: Request) {
     let aiAnalysis = null;
     try {
       console.log('[Cron] Running AI analysis...');
-      const aiResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/ai-analysis`, {
+      const aiResponse = await fetch(`${baseUrl}/api/ai-analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
