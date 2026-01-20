@@ -2126,7 +2126,7 @@ function HomeContent() {
                               {explanation.competitorLinks.map((competitor: any, cIdx: number) => (
                                 <div key={cIdx} className="text-xs text-gray-300 mb-1">
                                   <span className="text-purple-300">{competitor.protocol} {competitor.marketName}</span>
-                                  {competitor.apr !== undefined && competitor.apr !== null && (
+                                  {competitor.apr !== undefined && competitor.apr !== null && typeof competitor.apr === 'number' && (
                                     <span className="text-gray-400 ml-2">(APR: {competitor.apr.toFixed(2)}%)</span>
                                   )}
                                   {competitor.merklUrl && (
@@ -2699,7 +2699,7 @@ function HomeContent() {
                                       return "APR (Annual Percentage Rate) represents the annualized return from Merkl incentives. This value shows the APR at the end of your selected date range, calculated from campaign metrics. APR = (Daily Rewards / TVL) × 365 × 100";
                                     })()}
                                   >
-                                    {market.apr.toFixed(2)}% APR
+                                    {market.apr !== undefined && market.apr !== null && typeof market.apr === 'number' ? `${market.apr.toFixed(2)}% APR` : 'APR N/A'}
                                   </span>
                                 )}
                                 {market.tvl !== undefined && (
