@@ -524,7 +524,7 @@ export async function GET(request: Request) {
             },
             includeAllData: true,
           }),
-        }, 120000); // 2 minute timeout for AI analysis
+        }, 300000); // 5 minute timeout for AI analysis (can take longer with includeAllData)
 
         const aiRequestDuration = Date.now() - aiRequestStartTime;
         console.log('[Cron] AI analysis request completed in', aiRequestDuration, 'ms, status:', aiResponse.status);
