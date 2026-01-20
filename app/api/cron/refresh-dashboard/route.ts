@@ -107,8 +107,10 @@ export async function GET(request: Request) {
     console.log('[Cron] Using base URL:', baseUrl);
 
     // Fetch current week data using HTTP with bypass token for Vercel protection
-    // Use VERCEL_AUTOMATION_BYPASS_SECRET if available (automatically set by Vercel)
-    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    // Try multiple sources for bypass secret:
+    // 1. VERCEL_AUTOMATION_BYPASS_SECRET (automatically set by Vercel)
+    // 2. BYPASS_SECRET (manual fallback if Vercel doesn't set it automatically)
+    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET || process.env.BYPASS_SECRET;
     const internalHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -116,9 +118,12 @@ export async function GET(request: Request) {
     // Add bypass header if available
     if (bypassSecret) {
       internalHeaders['x-vercel-protection-bypass'] = bypassSecret;
-      console.log('[Cron] Using Vercel automation bypass token');
+      console.log('[Cron] Using Vercel automation bypass token (length:', bypassSecret.length, ')');
     } else {
-      console.log('[Cron] Warning: VERCEL_AUTOMATION_BYPASS_SECRET not set, may hit protection');
+      console.log('[Cron] Warning: No bypass token found. Checked:');
+      console.log('[Cron]   - VERCEL_AUTOMATION_BYPASS_SECRET:', !!process.env.VERCEL_AUTOMATION_BYPASS_SECRET);
+      console.log('[Cron]   - BYPASS_SECRET:', !!process.env.BYPASS_SECRET);
+      console.log('[Cron]   May hit protection - requests will likely fail');
     }
     
     // Helper to add bypass token to URL as query parameter (Vercel supports both header and query param)
