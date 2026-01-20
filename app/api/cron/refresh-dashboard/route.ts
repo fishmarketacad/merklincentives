@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setCache } from '@/app/lib/dashboardCache';
-import { POST as queryMonSpentPOST } from '@/app/api/query-mon-spent/route';
-import { POST as protocolTvlPOST } from '@/app/api/protocol-tvl/route';
-import { POST as aiAnalysisPOST } from '@/app/api/ai-analysis/route';
 
 // Common protocols list (same as frontend)
 const commonProtocols = [
@@ -68,9 +65,10 @@ async function fetchMonPrice(): Promise<number> {
 }
 
 export async function GET(request: Request) {
+  const startTime = Date.now();
   try {
     console.log('[Cron] Starting dashboard refresh...');
-    const startTime = Date.now();
+    console.log('[Cron] Request URL:', request.url);
 
     // Verify this is a cron request (Vercel adds this header)
     const authHeader = request.headers.get('authorization');
@@ -90,36 +88,59 @@ export async function GET(request: Request) {
     const monPrice = await fetchMonPrice();
     console.log('[Cron] MON price:', monPrice);
 
-    // Helper function to create mock NextRequest
-    // We use the request URL as base but change the path
-    function createMockRequest(body: any, path: string): NextRequest {
-      const baseUrl = new URL(request.url);
-      baseUrl.pathname = path;
-      return new NextRequest(baseUrl.toString(), {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      });
+    // Construct base URL for internal API calls
+    // Use VERCEL_URL if available, otherwise construct from request
+    let baseUrl = process.env.VERCEL_URL 
+      ? `https://${process.env.VERCEL_URL}`
+      : process.env.NEXT_PUBLIC_BASE_URL;
+    
+    if (!baseUrl) {
+      try {
+        const url = new URL(request.url);
+        baseUrl = `${url.protocol}//${url.host}`;
+      } catch {
+        baseUrl = 'http://localhost:3000';
+      }
     }
 
-    // Fetch current week data by calling route handlers directly (bypasses HTTP/Vercel protection)
-    console.log('[Cron] Calling route handlers directly...');
+    console.log('[Cron] Using base URL:', baseUrl);
+
+    // Fetch current week data using HTTP with internal headers
+    // Add a special header to identify this as an internal call
+    const internalHeaders = {
+      'Content-Type': 'application/json',
+      'X-Internal-Request': 'true', // Custom header to identify internal calls
+    };
+
+    console.log('[Cron] Fetching current week data...');
     
-    const [monSpentResponse, tvlResponse] = await Promise.all([
-      queryMonSpentPOST(createMockRequest({
-        protocols: commonProtocols,
-        startDate: sevenDaysAgo,
-        endDate: yesterday,
-        token: 'WMON',
-      }, '/api/query-mon-spent')),
-      protocolTvlPOST(createMockRequest({
-        protocols: commonProtocols,
-        startDate: sevenDaysAgo,
-        endDate: yesterday,
-      }, '/api/protocol-tvl')),
-    ]);
+    let monSpentResponse, tvlResponse;
+    try {
+      [monSpentResponse, tvlResponse] = await Promise.all([
+        fetch(`${baseUrl}/api/query-mon-spent`, {
+          method: 'POST',
+          headers: internalHeaders,
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: sevenDaysAgo,
+            endDate: yesterday,
+            token: 'WMON',
+          }),
+        }),
+        fetch(`${baseUrl}/api/protocol-tvl`, {
+          method: 'POST',
+          headers: internalHeaders,
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: sevenDaysAgo,
+            endDate: yesterday,
+          }),
+        }),
+      ]);
+    } catch (fetchError: any) {
+      console.error('[Cron] Fetch error:', fetchError);
+      throw new Error(`Failed to fetch data from ${baseUrl}: ${fetchError.message || 'Unknown error'}`);
+    }
 
     if (!monSpentResponse.ok) {
       const errorData = await monSpentResponse.json();
@@ -139,19 +160,33 @@ export async function GET(request: Request) {
     console.log('[Cron] Current week data fetched, results:', monSpentData.results?.length || 0);
 
     // Fetch previous week data
-    const [prevMonSpentResponse, prevTvlResponse] = await Promise.all([
-      queryMonSpentPOST(createMockRequest({
-        protocols: commonProtocols,
-        startDate: prevStartDate,
-        endDate: prevEndDate,
-        token: 'WMON',
-      }, '/api/query-mon-spent')),
-      protocolTvlPOST(createMockRequest({
-        protocols: commonProtocols,
-        startDate: prevStartDate,
-        endDate: prevEndDate,
-      }, '/api/protocol-tvl')),
-    ]);
+    let prevMonSpentResponse, prevTvlResponse;
+    try {
+      [prevMonSpentResponse, prevTvlResponse] = await Promise.all([
+        fetch(`${baseUrl}/api/query-mon-spent`, {
+          method: 'POST',
+          headers: internalHeaders,
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+            token: 'WMON',
+          }),
+        }),
+        fetch(`${baseUrl}/api/protocol-tvl`, {
+          method: 'POST',
+          headers: internalHeaders,
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+          }),
+        }),
+      ]);
+    } catch (fetchError: any) {
+      console.error('[Cron] Previous week fetch error:', fetchError);
+      throw new Error(`Failed to fetch previous week data from ${baseUrl}: ${fetchError.message || 'Unknown error'}`);
+    }
 
     if (!prevMonSpentResponse.ok) {
       const errorData = await prevMonSpentResponse.json();
@@ -177,7 +212,10 @@ export async function GET(request: Request) {
     let aiAnalysis = null;
     try {
       console.log('[Cron] Running AI analysis...');
-      const aiResponse = await aiAnalysisPOST(createMockRequest({
+      const aiResponse = await fetch(`${baseUrl}/api/ai-analysis`, {
+        method: 'POST',
+        headers: internalHeaders,
+        body: JSON.stringify({
           currentWeek: {
             pools: (monSpentData.results || []).flatMap((platform: any) =>
               platform.fundingProtocols.flatMap((funding: any) =>
@@ -225,7 +263,8 @@ export async function GET(request: Request) {
             endDate: prevEndDate,
           },
         includeAllData: true,
-      }, '/api/ai-analysis'));
+      }),
+      });
 
       if (aiResponse.ok) {
         const aiData = await aiResponse.json();
