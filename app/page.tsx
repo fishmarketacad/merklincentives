@@ -225,41 +225,107 @@ function HomeContent() {
           setMonPrice('0.025');
         }
       } else {
-        // No URL params: check cache first for instant display
-        const yesterday = getYesterdayUTC();
-        const sevenDaysAgo = getSevenDaysAgoUTC();
-        const cache = loadDashboardCache();
+        // No URL params: try to load from server cache first
+        try {
+          const response = await fetch('/api/dashboard-default');
+          const data = await response.json();
 
-        if (isCacheValid(cache)) {
-          // Use cached data - instant display, no loading!
-          setStartDate(cache!.startDate);
-          setEndDate(cache!.endDate);
-          setProtocols(cache!.protocols);
-          setMonPrice(cache!.monPrice);
-          setResults(cache!.results);
-          setPreviousWeekResults(cache!.previousWeekResults);
-          setProtocolTVL(cache!.protocolTVL);
-          setProtocolTVLMetadata(cache!.protocolTVLMetadata);
-          setProtocolDEXVolume(cache!.protocolDEXVolume);
-          setMarketVolumes(cache!.marketVolumes);
-          setPreviousWeekProtocolTVL(cache!.previousWeekProtocolTVL);
-          setPreviousWeekProtocolDEXVolume(cache!.previousWeekProtocolDEXVolume);
-          setPreviousWeekMarketVolumes(cache!.previousWeekMarketVolumes);
-          setAiAnalysis(cache!.aiAnalysis);
-        } else {
-          // No valid cache: fetch fresh data
-          setStartDate(sevenDaysAgo);
-          setEndDate(yesterday);
-          setProtocols(commonProtocols); // Select all protocols
+          if (response.ok && data.success && data.cached && data.data) {
+            // Server cache hit - instant display!
+            console.log('[Init] Server cache hit, loading data instantly');
+            const cache = data.data;
+            setStartDate(cache.startDate);
+            setEndDate(cache.endDate);
+            setProtocols(cache.protocols);
+            setMonPrice(cache.monPrice.toString());
+            setResults(cache.results);
+            setPreviousWeekResults(cache.previousWeekResults);
+            setProtocolTVL(cache.protocolTVL);
+            setProtocolTVLMetadata(cache.protocolTVLMetadata);
+            setProtocolDEXVolume(cache.protocolDEXVolume);
+            setMarketVolumes(cache.marketVolumes);
+            setPreviousWeekProtocolTVL(cache.previousWeekProtocolTVL);
+            setPreviousWeekProtocolDEXVolume(cache.previousWeekProtocolDEXVolume);
+            setPreviousWeekMarketVolumes(cache.previousWeekMarketVolumes);
+            setAiAnalysis(cache.aiAnalysis);
 
-          // Fetch MON price from API
-          const price = await fetchMonPrice();
-          setMonPrice(price);
+            // Also save to localStorage for backup
+            saveDashboardCache({
+              ...cache,
+              monPrice: cache.monPrice.toString(),
+              timestamp: cache.timestamp,
+              cacheDate: cache.endDate,
+            });
+          } else {
+            // Server cache miss - fall back to client behavior
+            console.log('[Init] Server cache miss, falling back to manual load');
+            const yesterday = getYesterdayUTC();
+            const sevenDaysAgo = getSevenDaysAgoUTC();
 
-          // Auto-run query to fetch fresh data
-          setIsAutoLoading(true);
-          // Note: handleQuery will be called after state is set
-          // We'll trigger it in a separate useEffect that watches for isAutoLoading
+            // Check localStorage as fallback
+            const localCache = loadDashboardCache();
+            if (isCacheValid(localCache)) {
+              console.log('[Init] Using localStorage cache');
+              setStartDate(localCache!.startDate);
+              setEndDate(localCache!.endDate);
+              setProtocols(localCache!.protocols);
+              setMonPrice(localCache!.monPrice);
+              setResults(localCache!.results);
+              setPreviousWeekResults(localCache!.previousWeekResults);
+              setProtocolTVL(localCache!.protocolTVL);
+              setProtocolTVLMetadata(localCache!.protocolTVLMetadata);
+              setProtocolDEXVolume(localCache!.protocolDEXVolume);
+              setMarketVolumes(localCache!.marketVolumes);
+              setPreviousWeekProtocolTVL(localCache!.previousWeekProtocolTVL);
+              setPreviousWeekProtocolDEXVolume(localCache!.previousWeekProtocolDEXVolume);
+              setPreviousWeekMarketVolumes(localCache!.previousWeekMarketVolumes);
+              setAiAnalysis(localCache!.aiAnalysis);
+            } else {
+              // No cache at all - trigger fresh fetch
+              console.log('[Init] No cache available, triggering fresh fetch');
+              setStartDate(sevenDaysAgo);
+              setEndDate(yesterday);
+              setProtocols(commonProtocols);
+
+              const price = await fetchMonPrice();
+              setMonPrice(price);
+
+              setIsAutoLoading(true);
+            }
+          }
+        } catch (error) {
+          // Error fetching server cache - fall back to localStorage or manual load
+          console.error('[Init] Error fetching server cache:', error);
+          const yesterday = getYesterdayUTC();
+          const sevenDaysAgo = getSevenDaysAgoUTC();
+
+          const localCache = loadDashboardCache();
+          if (isCacheValid(localCache)) {
+            console.log('[Init] Using localStorage cache after server error');
+            setStartDate(localCache!.startDate);
+            setEndDate(localCache!.endDate);
+            setProtocols(localCache!.protocols);
+            setMonPrice(localCache!.monPrice);
+            setResults(localCache!.results);
+            setPreviousWeekResults(localCache!.previousWeekResults);
+            setProtocolTVL(localCache!.protocolTVL);
+            setProtocolTVLMetadata(localCache!.protocolTVLMetadata);
+            setProtocolDEXVolume(localCache!.protocolDEXVolume);
+            setMarketVolumes(localCache!.marketVolumes);
+            setPreviousWeekProtocolTVL(localCache!.previousWeekProtocolTVL);
+            setPreviousWeekProtocolDEXVolume(localCache!.previousWeekProtocolDEXVolume);
+            setPreviousWeekMarketVolumes(localCache!.previousWeekMarketVolumes);
+            setAiAnalysis(localCache!.aiAnalysis);
+          } else {
+            setStartDate(sevenDaysAgo);
+            setEndDate(yesterday);
+            setProtocols(commonProtocols);
+
+            const price = await fetchMonPrice();
+            setMonPrice(price);
+
+            setIsAutoLoading(true);
+          }
         }
       }
 
@@ -1436,6 +1502,8 @@ function HomeContent() {
 
   // Prepare data for AI analysis
   const prepareAIData = () => {
+    console.log('[prepareAIData] Called with results.length:', results.length, 'previousWeekResults.length:', previousWeekResults.length);
+
     const monPriceNum = parseFloat(monPrice);
     const periodDays = Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
@@ -1630,9 +1698,13 @@ function HomeContent() {
 
   // Handle AI analysis
   const handleAIAnalysis = async (autoRun = false) => {
-    // Skip the results check if this is an auto-run (results state might not be updated yet)
-    if (!autoRun && results.length === 0) {
-      setAiError('Please query data first before running AI analysis');
+    console.log('[handleAIAnalysis] Called with autoRun:', autoRun, 'results.length:', results.length);
+
+    // Always check results length, even for auto-run
+    if (results.length === 0) {
+      const errorMsg = 'Please query data first before running AI analysis';
+      console.error('[handleAIAnalysis] Error:', errorMsg);
+      setAiError(errorMsg);
       return;
     }
 
@@ -1642,6 +1714,7 @@ function HomeContent() {
 
     try {
       const aiData = prepareAIData();
+      console.log('[handleAIAnalysis] Prepared AI data with', aiData.currentWeek.pools?.length || 0, 'current pools and', aiData.previousWeek?.pools?.length || 0, 'previous pools');
       // Include all campaigns and opportunities for comprehensive analysis
       const aiDataWithAll = {
         ...aiData,
