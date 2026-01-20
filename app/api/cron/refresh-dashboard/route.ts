@@ -506,6 +506,7 @@ export async function GET(request: Request) {
         console.log('[Cron] Prepared', currentPools.length, 'current pools and', previousPools.length, 'previous pools');
         const aiUrl = addBypassToUrl(`${baseUrl}/api/ai-analysis`);
         
+        const aiRequestStartTime = Date.now();
         const aiResponse = await fetchWithTimeout(aiUrl, {
           method: 'POST',
           headers: internalHeaders,
@@ -525,16 +526,34 @@ export async function GET(request: Request) {
           }),
         }, 120000); // 2 minute timeout for AI analysis
 
+        const aiRequestDuration = Date.now() - aiRequestStartTime;
+        console.log('[Cron] AI analysis request completed in', aiRequestDuration, 'ms, status:', aiResponse.status);
+
         if (aiResponse.ok) {
           const aiData = await aiResponse.json();
-          await updateAIAnalysis(aiData.analysis);
-          console.log('[Cron] AI analysis complete and cache updated');
+          console.log('[Cron] AI analysis response keys:', Object.keys(aiData || {}));
+          console.log('[Cron] AI analysis.analysis exists:', !!aiData.analysis);
+          console.log('[Cron] AI analysis.analysis keys:', aiData.analysis ? Object.keys(aiData.analysis) : 'null');
+          
+          if (aiData.analysis) {
+            await updateAIAnalysis(aiData.analysis);
+            console.log('[Cron] ✅ AI analysis complete and cache updated successfully');
+          } else {
+            console.error('[Cron] ❌ AI analysis response missing analysis field:', JSON.stringify(aiData).substring(0, 500));
+          }
         } else {
-          const errorData = await aiResponse.json();
-          console.error('[Cron] AI analysis failed:', errorData);
+          const errorText = await aiResponse.text();
+          let errorData;
+          try {
+            errorData = JSON.parse(errorText);
+          } catch {
+            errorData = errorText;
+          }
+          console.error('[Cron] ❌ AI analysis failed with status', aiResponse.status, ':', JSON.stringify(errorData).substring(0, 1000));
         }
-      } catch (aiError) {
-        console.error('[Cron] AI analysis error:', aiError);
+      } catch (aiError: any) {
+        console.error('[Cron] ❌ AI analysis error (exception):', aiError?.message || aiError);
+        console.error('[Cron] ❌ AI analysis error stack:', aiError?.stack?.substring(0, 500));
         // Cache already has data, AI analysis is optional
       }
     })(); // Fire-and-forget - don't await
