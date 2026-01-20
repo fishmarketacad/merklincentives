@@ -64,6 +64,155 @@ async function fetchMonPrice(): Promise<number> {
   }
 }
 
+// Helper: Extract token pair from market name
+function extractTokenPair(marketName: string): string {
+  const match = marketName.match(/([A-Z0-9]+)[-\/]([A-Z0-9]+)/);
+  if (match) {
+    return `${match[1]}-${match[2]}`;
+  }
+  return '';
+}
+
+// Helper: Calculate TVL Cost
+function calculateTVLCost(incentivesUSD: number, tvl: number, periodDays: number): number | null {
+  if (!tvl || tvl === 0 || !incentivesUSD) return null;
+  const annualizedIncentives = (incentivesUSD / periodDays) * 365;
+  return (annualizedIncentives / tvl) * 100;
+}
+
+// Helper: Prepare AI analysis data with TVL, volume, TVL Cost, and WoW changes
+function prepareAIData(
+  results: any[],
+  previousWeekResults: any[],
+  protocolTVL: any,
+  protocolDEXVolume: any,
+  previousWeekProtocolTVL: any,
+  previousWeekProtocolDEXVolume: any,
+  monPrice: number,
+  periodDays: number
+) {
+  // Create a map to find previous week pools
+  const prevPoolMap = new Map<string, any>();
+  (previousWeekResults || []).forEach((platform: any) => {
+    platform.fundingProtocols?.forEach((funding: any) => {
+      funding.markets?.forEach((market: any) => {
+        const key = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`;
+        prevPoolMap.set(key.toLowerCase(), {
+          protocol: platform.platformProtocol,
+          fundingProtocol: funding.fundingProtocol,
+          marketName: market.marketName,
+          incentivesMON: market.totalMON || 0,
+          incentivesUSD: (market.totalMON || 0) * monPrice,
+          tvl: market.tvl || null,
+        });
+      });
+    });
+  });
+
+  // Prepare current week pools
+  const currentPools = (results || []).flatMap((platform: any) =>
+    platform.fundingProtocols.flatMap((funding: any) =>
+      funding.markets.map((market: any) => {
+        const protocolKey = platform.platformProtocol.toLowerCase();
+        const marketKey = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`.toLowerCase();
+        
+        // Get TVL from protocolTVL (prefer protocol-level TVL over market-level)
+        let tvl = market.tvl || null;
+        if (protocolTVL[protocolKey]?.tvl) {
+          tvl = protocolTVL[protocolKey].tvl;
+        }
+        
+        // Get volume from protocolDEXVolume
+        const tokenPair = extractTokenPair(market.marketName);
+        let volume = null;
+        if (protocolDEXVolume[protocolKey] && tokenPair) {
+          const volumeData = protocolDEXVolume[protocolKey][tokenPair];
+          if (volumeData?.volumeInRange) {
+            volume = volumeData.volumeInRange;
+          }
+        }
+        
+        // Calculate TVL Cost
+        const incentivesUSD = (market.totalMON || 0) * monPrice;
+        const tvlCost = calculateTVLCost(incentivesUSD, tvl || 0, periodDays);
+        
+        // Find previous week pool
+        const prevPool = prevPoolMap.get(marketKey);
+        let wowChange = null;
+        if (prevPool && tvlCost !== null) {
+          const prevTvl = prevPool.tvl || null;
+          const prevIncentivesUSD = prevPool.incentivesUSD || 0;
+          const prevTVLCost = calculateTVLCost(prevIncentivesUSD, prevTvl || 0, periodDays);
+          if (prevTVLCost !== null && prevTVLCost !== 0) {
+            wowChange = ((tvlCost - prevTVLCost) / prevTVLCost) * 100;
+          }
+        }
+        
+        return {
+          protocol: platform.platformProtocol,
+          fundingProtocol: funding.fundingProtocol,
+          marketName: market.marketName,
+          tokenPair,
+          incentivesMON: market.totalMON || 0,
+          incentivesUSD,
+          tvl,
+          volume,
+          apr: market.apr || null,
+          tvlCost,
+          wowChange,
+          periodDays,
+          merklUrl: market.merklUrl || null,
+        };
+      })
+    )
+  );
+
+  // Prepare previous week pools
+  const previousPools = (previousWeekResults || []).flatMap((platform: any) =>
+    platform.fundingProtocols.flatMap((funding: any) =>
+      funding.markets.map((market: any) => {
+        const protocolKey = platform.platformProtocol.toLowerCase();
+        const tokenPair = extractTokenPair(market.marketName);
+        
+        // Get TVL from previousWeekProtocolTVL
+        let tvl = market.tvl || null;
+        if (previousWeekProtocolTVL[protocolKey]?.tvl) {
+          tvl = previousWeekProtocolTVL[protocolKey].tvl;
+        }
+        
+        // Get volume from previousWeekProtocolDEXVolume
+        let volume = null;
+        if (previousWeekProtocolDEXVolume[protocolKey] && tokenPair) {
+          const volumeData = previousWeekProtocolDEXVolume[protocolKey][tokenPair];
+          if (volumeData?.volumeInRange) {
+            volume = volumeData.volumeInRange;
+          }
+        }
+        
+        const incentivesUSD = (market.totalMON || 0) * monPrice;
+        const tvlCost = calculateTVLCost(incentivesUSD, tvl || 0, periodDays);
+        
+        return {
+          protocol: platform.platformProtocol,
+          fundingProtocol: funding.fundingProtocol,
+          marketName: market.marketName,
+          tokenPair,
+          incentivesMON: market.totalMON || 0,
+          incentivesUSD,
+          tvl,
+          volume,
+          apr: market.apr || null,
+          tvlCost,
+          wowChange: null, // Will be calculated by comparing with current week
+          periodDays,
+        };
+      })
+    )
+  );
+
+  return { currentPools, previousPools };
+}
+
 export async function GET(request: Request) {
   const startTime = Date.now();
   try {
@@ -339,9 +488,22 @@ export async function GET(request: Request) {
     // This prevents timeout - we return success immediately and update cache when AI completes
     const periodDays = Math.floor((new Date(yesterday).getTime() - new Date(sevenDaysAgo).getTime()) / (1000 * 60 * 60 * 24)) + 1;
     
+    // Prepare AI analysis data with TVL, volume, TVL Cost, and WoW changes
+    const { currentPools, previousPools } = prepareAIData(
+      monSpentData.results || [],
+      prevMonSpentData.results || [],
+      tvlData.tvlData || {},
+      tvlData.dexVolumeData || {},
+      prevTvlData.tvlData || {},
+      prevTvlData.dexVolumeData || {},
+      monPrice,
+      periodDays
+    );
+    
     (async () => {
       try {
         console.log('[Cron] Running AI analysis asynchronously...');
+        console.log('[Cron] Prepared', currentPools.length, 'current pools and', previousPools.length, 'previous pools');
         const aiUrl = addBypassToUrl(`${baseUrl}/api/ai-analysis`);
         
         const aiResponse = await fetchWithTimeout(aiUrl, {
@@ -349,48 +511,13 @@ export async function GET(request: Request) {
           headers: internalHeaders,
           body: JSON.stringify({
             currentWeek: {
-              pools: (monSpentData.results || []).flatMap((platform: any) =>
-                platform.fundingProtocols.flatMap((funding: any) =>
-                  funding.markets.map((market: any) => ({
-                    protocol: platform.platformProtocol,
-                    fundingProtocol: funding.fundingProtocol,
-                    marketName: market.marketName,
-                    tokenPair: '',
-                    incentivesMON: market.totalMON,
-                    incentivesUSD: market.totalMON * monPrice,
-                    tvl: market.tvl || null,
-                    volume: null,
-                    apr: market.apr || null,
-                    tvlCost: null,
-                    wowChange: null,
-                    periodDays,
-                    merklUrl: market.merklUrl,
-                  }))
-                )
-              ),
+              pools: currentPools,
               startDate: sevenDaysAgo,
               endDate: yesterday,
               monPrice,
             },
             previousWeek: {
-              pools: (prevMonSpentData.results || []).flatMap((platform: any) =>
-                platform.fundingProtocols.flatMap((funding: any) =>
-                  funding.markets.map((market: any) => ({
-                    protocol: platform.platformProtocol,
-                    fundingProtocol: funding.fundingProtocol,
-                    marketName: market.marketName,
-                    tokenPair: '',
-                    incentivesMON: market.totalMON,
-                    incentivesUSD: market.totalMON * monPrice,
-                    tvl: market.tvl || null,
-                    volume: null,
-                    apr: market.apr || null,
-                    tvlCost: null,
-                    wowChange: null,
-                    periodDays,
-                  }))
-                )
-              ),
+              pools: previousPools,
               startDate: prevStartDate,
               endDate: prevEndDate,
             },
