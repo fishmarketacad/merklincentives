@@ -2964,7 +2964,7 @@ function HomeContent() {
                                   </span>
                                 )}
                                 {market.apr !== undefined && (
-                                  <span 
+                                  <span
                                     className="text-xs text-purple-400 font-semibold bg-purple-500/10 px-2 py-0.5 rounded cursor-help flex-shrink-0"
                                     title={(() => {
                                       const poolId = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`;
@@ -2979,7 +2979,7 @@ function HomeContent() {
                                   </span>
                                 )}
                                 {market.tvl !== undefined && (
-                                  <span 
+                                  <span
                                     className="text-xs text-blue-400 font-semibold bg-blue-500/10 px-2 py-0.5 rounded cursor-help flex-shrink-0"
                                     title={(() => {
                                       const poolId = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`;
@@ -2990,7 +2990,7 @@ function HomeContent() {
                                       return "TVL (Total Value Locked) shows the total value locked in this market at the end of your selected date range, in USD";
                                     })()}
                                   >
-                                    {market.tvl >= 1000000 
+                                    {market.tvl >= 1000000
                                       ? `$${(market.tvl / 1000000).toFixed(2)}M TVL`
                                       : market.tvl >= 1000
                                       ? `$${(market.tvl / 1000).toFixed(2)}K TVL`
@@ -3006,6 +3006,19 @@ function HomeContent() {
                               </span>
                             </div>
                           ))}
+
+                          {/* Subtotal row for this funding protocol */}
+                          <div className="flex justify-between items-center text-sm pt-2 mt-2 border-t border-purple-500/30">
+                            <span className="font-semibold text-purple-300 uppercase tracking-wide">
+                              Subtotal
+                            </span>
+                            <span className="whitespace-nowrap text-purple-300 font-bold flex-shrink-0">
+                              {funding.totalMON.toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })} MON
+                            </span>
+                          </div>
                         </div>
                       </div>
                     ))}
