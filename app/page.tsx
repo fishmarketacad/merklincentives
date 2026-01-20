@@ -556,6 +556,25 @@ function HomeContent() {
             localCache.aiAnalysis = aiData.analysis;
             saveDashboardCache(localCache);
           }
+
+          // Update server cache so other users can see AI analysis
+          try {
+            const cacheResponse = await fetch('/api/dashboard-default', {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ aiAnalysis: aiData.analysis }),
+            });
+
+            if (cacheResponse.ok) {
+              console.log('[AI Auto-Trigger] ✅ AI analysis saved to server cache for all users');
+            } else {
+              console.warn('[AI Auto-Trigger] ⚠️ Failed to save AI analysis to server cache');
+            }
+          } catch (cacheError) {
+            console.warn('[AI Auto-Trigger] ⚠️ Error saving AI analysis to server cache:', cacheError);
+          }
         } else {
           throw new Error('AI analysis response missing analysis field');
         }
@@ -2011,6 +2030,25 @@ function HomeContent() {
       console.log('[AI Analysis] wowExplanations count:', data.analysis?.wowExplanations?.length || 0);
       console.log('[AI Analysis] efficiencyIssues count:', data.analysis?.efficiencyIssues?.length || 0);
       console.log('[AI Analysis] protocolRecommendations count:', data.analysis?.protocolRecommendations?.length || 0);
+
+      // Update server cache so other users can see AI analysis
+      try {
+        const cacheResponse = await fetch('/api/dashboard-default', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ aiAnalysis: data.analysis }),
+        });
+
+        if (cacheResponse.ok) {
+          console.log('[AI Analysis] ✅ AI analysis saved to server cache for all users');
+        } else {
+          console.warn('[AI Analysis] ⚠️ Failed to save AI analysis to server cache');
+        }
+      } catch (cacheError) {
+        console.warn('[AI Analysis] ⚠️ Error saving AI analysis to server cache:', cacheError);
+      }
     } catch (err: any) {
       console.error('AI Analysis error:', err);
       let errorMsg = err.message || err.toString() || 'An error occurred during AI analysis';
