@@ -213,7 +213,7 @@ function prepareAIData(
   return { currentPools, previousPools };
 }
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const startTime = Date.now();
   try {
     console.log('[Cron] Starting dashboard refresh...');
@@ -484,23 +484,35 @@ export async function GET(request: Request) {
     const duration = Date.now() - startTime;
     console.log('[Cron] Dashboard data cached in', duration, 'ms');
 
-    // Run AI analysis ASYNCHRONOUSLY (fire-and-forget)
+    // Run AI analysis ASYNCHRONOUSLY using waitUntil to keep function alive
     // This prevents timeout - we return success immediately and update cache when AI completes
     const periodDays = Math.floor((new Date(yesterday).getTime() - new Date(sevenDaysAgo).getTime()) / (1000 * 60 * 60 * 24)) + 1;
     
     // Prepare AI analysis data with TVL, volume, TVL Cost, and WoW changes
-    const { currentPools, previousPools } = prepareAIData(
-      monSpentData.results || [],
-      prevMonSpentData.results || [],
-      tvlData.tvlData || {},
-      tvlData.dexVolumeData || {},
-      prevTvlData.tvlData || {},
-      prevTvlData.dexVolumeData || {},
-      monPrice,
-      periodDays
-    );
+    console.log('[Cron] Preparing AI analysis data...');
+    let currentPools: any[] = [];
+    let previousPools: any[] = [];
+    try {
+      const prepared = prepareAIData(
+        monSpentData.results || [],
+        prevMonSpentData.results || [],
+        tvlData.tvlData || {},
+        tvlData.dexVolumeData || {},
+        prevTvlData.tvlData || {},
+        prevTvlData.dexVolumeData || {},
+        monPrice,
+        periodDays
+      );
+      currentPools = prepared.currentPools;
+      previousPools = prepared.previousPools;
+      console.log('[Cron] AI data prepared successfully:', { currentPools: currentPools.length, previousPools: previousPools.length });
+    } catch (prepareError: any) {
+      console.error('[Cron] ❌ Failed to prepare AI data:', prepareError?.message || prepareError);
+      console.error('[Cron] ❌ Prepare error stack:', prepareError?.stack?.substring(0, 500));
+    }
     
-    (async () => {
+    // Use waitUntil to keep the function alive for background work
+    const aiAnalysisPromise = (async () => {
       try {
         console.log('[Cron] Running AI analysis asynchronously...');
         console.log('[Cron] Prepared', currentPools.length, 'current pools and', previousPools.length, 'previous pools');
@@ -556,7 +568,16 @@ export async function GET(request: Request) {
         console.error('[Cron] ❌ AI analysis error stack:', aiError?.stack?.substring(0, 500));
         // Cache already has data, AI analysis is optional
       }
-    })(); // Fire-and-forget - don't await
+    })();
+    
+    // Use waitUntil to keep function alive for background work (Vercel/Next.js feature)
+    if ('waitUntil' in request && typeof (request as any).waitUntil === 'function') {
+      (request as any).waitUntil(aiAnalysisPromise);
+      console.log('[Cron] Using waitUntil to keep function alive for AI analysis');
+    } else {
+      // Fallback: just start the promise (may be killed when function returns)
+      console.warn('[Cron] waitUntil not available, AI analysis may be terminated early');
+    }
 
     return NextResponse.json({
       success: true,
