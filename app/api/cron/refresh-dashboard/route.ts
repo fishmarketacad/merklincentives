@@ -511,41 +511,43 @@ export async function GET(request: NextRequest) {
       console.error('[Cron] ❌ Prepare error stack:', prepareError?.stack?.substring(0, 500));
     }
     
-    // Use waitUntil to keep the function alive for background work
-    const aiAnalysisPromise = (async () => {
-      try {
-        console.log('[Cron] Running AI analysis asynchronously...');
-        console.log('[Cron] Prepared', currentPools.length, 'current pools and', previousPools.length, 'previous pools');
-        const aiUrl = addBypassToUrl(`${baseUrl}/api/ai-analysis`);
-        
-        const aiRequestStartTime = Date.now();
-        const aiResponse = await fetchWithTimeout(aiUrl, {
-          method: 'POST',
-          headers: internalHeaders,
-          body: JSON.stringify({
-            currentWeek: {
-              pools: currentPools,
-              startDate: sevenDaysAgo,
-              endDate: yesterday,
-              monPrice,
-            },
-            previousWeek: {
-              pools: previousPools,
-              startDate: prevStartDate,
-              endDate: prevEndDate,
-            },
-            includeAllData: true,
-          }),
-        }, 300000); // 5 minute timeout for AI analysis (can take longer with includeAllData)
-
-        const aiRequestDuration = Date.now() - aiRequestStartTime;
-        console.log('[Cron] AI analysis request completed in', aiRequestDuration, 'ms, status:', aiResponse.status);
+    // Trigger AI analysis as a separate HTTP request (runs in its own function instance)
+    // Use fetch() without await so it runs independently and doesn't block the response
+    // This ensures it runs in a separate function instance and won't be killed when this function returns
+    console.log('[Cron] Triggering AI analysis as separate HTTP request...');
+    console.log('[Cron] Prepared', currentPools.length, 'current pools and', previousPools.length, 'previous pools');
+    const aiUrl = addBypassToUrl(`${baseUrl}/api/ai-analysis`);
+    
+    // Fire-and-forget: Start the fetch but don't await it
+    // This will run in a separate function instance and won't be killed when this function returns
+    fetch(aiUrl, {
+      method: 'POST',
+      headers: {
+        ...internalHeaders,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        currentWeek: {
+          pools: currentPools,
+          startDate: sevenDaysAgo,
+          endDate: yesterday,
+          monPrice,
+        },
+        previousWeek: {
+          pools: previousPools,
+          startDate: prevStartDate,
+          endDate: prevEndDate,
+        },
+        includeAllData: true,
+      }),
+    })
+      .then(async (aiResponse) => {
+        console.log('[Cron] AI analysis request completed, status:', aiResponse.status);
 
         if (aiResponse.ok) {
           const aiData = await aiResponse.json();
           console.log('[Cron] AI analysis response keys:', Object.keys(aiData || {}));
           console.log('[Cron] AI analysis.analysis exists:', !!aiData.analysis);
-          console.log('[Cron] AI analysis.analysis keys:', aiData.analysis ? Object.keys(aiData.analysis) : 'null');
           
           if (aiData.analysis) {
             await updateAIAnalysis(aiData.analysis);
@@ -563,50 +565,21 @@ export async function GET(request: NextRequest) {
           }
           console.error('[Cron] ❌ AI analysis failed with status', aiResponse.status, ':', JSON.stringify(errorData).substring(0, 1000));
         }
-      } catch (aiError: any) {
+      })
+      .catch((aiError: any) => {
         console.error('[Cron] ❌ AI analysis error (exception):', aiError?.message || aiError);
         console.error('[Cron] ❌ AI analysis error stack:', aiError?.stack?.substring(0, 500));
         // Cache already has data, AI analysis is optional
-      }
-    })();
+      });
     
-    // Vercel doesn't support waitUntil - we need to wait for AI analysis or trigger it separately
-    // For now, let's try to run it synchronously with a timeout
-    // If it takes too long, we'll return early and the frontend can trigger it manually
-    let aiAnalysisCompleted = false;
-    let aiAnalysisError: any = null;
-    
-    try {
-      // Wait up to 50 seconds for AI analysis (Vercel Pro plan has 60s limit)
-      const aiAnalysisWithTimeout = Promise.race([
-        aiAnalysisPromise,
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('AI analysis timeout')), 50000)
-        )
-      ]);
-      
-      await aiAnalysisWithTimeout;
-      aiAnalysisCompleted = true;
-      console.log('[Cron] AI analysis completed synchronously');
-    } catch (timeoutError: any) {
-      if (timeoutError.message === 'AI analysis timeout') {
-        console.warn('[Cron] AI analysis timed out after 50s, continuing in background (may be killed)');
-        // Start it in background anyway - might work if function stays alive
-        aiAnalysisPromise.catch((err) => {
-          console.error('[Cron] Background AI analysis failed:', err);
-        });
-      } else {
-        aiAnalysisError = timeoutError;
-        console.error('[Cron] AI analysis error:', timeoutError);
-      }
-    }
+    console.log('[Cron] AI analysis HTTP request initiated (running in separate function instance)');
 
     return NextResponse.json({
       success: true,
       date: yesterday,
       duration,
       poolsCount: monSpentData.results?.length || 0,
-      aiAnalysisIncluded: aiAnalysisCompleted,
+      aiAnalysisIncluded: false, // Will be updated asynchronously
       aiAnalysisError: aiAnalysisError?.message || null,
       message: aiAnalysisCompleted 
         ? 'Dashboard data cached. AI analysis completed.'
