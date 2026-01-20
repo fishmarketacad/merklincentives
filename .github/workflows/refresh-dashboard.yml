@@ -35,7 +35,8 @@ jobs:
           
           echo "Calling refresh endpoint at: ${VERCEL_URL}/api/cron/refresh-dashboard"
           
-          # Call the refresh endpoint with authentication
+          # Call the refresh endpoint with authentication and bypass token
+          # The bypass token is automatically included by the endpoint if VERCEL_AUTOMATION_BYPASS_SECRET is set
           response=$(curl -s -w "\n%{http_code}" -X GET \
             -H "Authorization: Bearer ${CRON_SECRET}" \
             -H "Content-Type: application/json" \

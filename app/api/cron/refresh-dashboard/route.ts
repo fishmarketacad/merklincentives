@@ -105,12 +105,20 @@ export async function GET(request: Request) {
 
     console.log('[Cron] Using base URL:', baseUrl);
 
-    // Fetch current week data using HTTP with internal headers
-    // Add a special header to identify this as an internal call
-    const internalHeaders = {
+    // Fetch current week data using HTTP with bypass token for Vercel protection
+    // Use VERCEL_AUTOMATION_BYPASS_SECRET if available (automatically set by Vercel)
+    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const internalHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
-      'X-Internal-Request': 'true', // Custom header to identify internal calls
     };
+    
+    // Add bypass header if available
+    if (bypassSecret) {
+      internalHeaders['x-vercel-protection-bypass'] = bypassSecret;
+      console.log('[Cron] Using Vercel automation bypass token');
+    } else {
+      console.log('[Cron] Warning: VERCEL_AUTOMATION_BYPASS_SECRET not set, may hit protection');
+    }
 
     console.log('[Cron] Fetching current week data...');
     
