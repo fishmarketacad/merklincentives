@@ -334,6 +334,53 @@ function HomeContent() {
 
     initializeDashboard();
   }, [searchParams]);
+
+  // Poll for AI analysis updates if it's missing but cache exists
+  useEffect(() => {
+    // Only poll if:
+    // 1. Dashboard is initialized
+    // 2. AI analysis is null
+    // 3. We have results (cache was loaded)
+    // 4. Cache is recent (within last 5 minutes)
+    if (!isInitialized || aiAnalysis !== null || results.length === 0) {
+      return;
+    }
+
+    const checkForAIAnalysis = async () => {
+      try {
+        const response = await fetch('/api/dashboard-default');
+        const data = await response.json();
+
+        if (response.ok && data.success && data.cached && data.data?.aiAnalysis) {
+          console.log('[AI Poll] AI analysis now available, updating...');
+          setAiAnalysis(data.data.aiAnalysis);
+          // Also update localStorage
+          const localCache = loadDashboardCache();
+          if (localCache) {
+            localCache.aiAnalysis = data.data.aiAnalysis;
+            saveDashboardCache(localCache);
+          }
+        }
+      } catch (error) {
+        console.warn('[AI Poll] Error checking for AI analysis:', error);
+      }
+    };
+
+    // Check immediately, then every 15 seconds
+    checkForAIAnalysis();
+    const interval = setInterval(checkForAIAnalysis, 15000); // Poll every 15 seconds
+
+    // Stop polling after 5 minutes (AI analysis should be done by then)
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+      console.log('[AI Poll] Stopped polling for AI analysis after 5 minutes');
+    }, 5 * 60 * 1000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [isInitialized, aiAnalysis, results.length]);
   
   // Update URL parameters when state changes (but not during initialization)
   useEffect(() => {
