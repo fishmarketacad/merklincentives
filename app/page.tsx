@@ -1082,7 +1082,6 @@ function HomeContent() {
   // Generate tooltip content from AI analysis for a given pool (now uses cache)
   const getAITooltip = (poolId: string, metricType: 'tvlCost' | 'tvlCostWoW' | 'volumeCost' | 'volumeCostWoW'): string | null => {
     if (!aiAnalysis) {
-      console.log(`[Tooltip] No AI analysis available for ${poolId} / ${metricType}`);
       return null;
     }
 
@@ -1091,16 +1090,7 @@ function HomeContent() {
     // Try direct lookup first
     const cachedTooltip = aiTooltipCache[normalizedPoolId]?.[metricType];
     if (cachedTooltip && cachedTooltip.trim().length > 0) {
-      console.log(`[Tooltip] Found cached tooltip for ${poolId} / ${metricType}`);
       return cachedTooltip;
-    }
-
-    // Debug: Log available cache keys if lookup fails
-    const cacheKeys = Object.keys(aiTooltipCache);
-    if (cacheKeys.length > 0) {
-      console.log(`[Tooltip] No cached tooltip for "${normalizedPoolId}" / ${metricType}. Available cache keys (first 5):`, cacheKeys.slice(0, 5));
-    } else {
-      console.warn(`[Tooltip] Cache is empty! aiAnalysis exists but cache is empty. aiAnalysis keys:`, Object.keys(aiAnalysis || {}));
     }
     
     // Fallback to flexible matching for protocol-level analysis
@@ -1139,15 +1129,13 @@ function HomeContent() {
         const shortenedKey = `${protocol}-${fundingProtocol}-${tokenPair}-${fee}%`;
         const shortenedTooltip = aiTooltipCache[shortenedKey]?.[metricType];
         if (shortenedTooltip && shortenedTooltip.trim().length > 0) {
-          console.log(`[Tooltip] Found tooltip using shortened key "${shortenedKey}" for ${poolId} / ${metricType}`);
           return shortenedTooltip;
         }
-        
+
         // Also try without funding protocol
         const shortenedProtocolKey = `${protocol}-${tokenPair}-${fee}%`;
         const shortenedProtocolTooltip = aiTooltipCache[shortenedProtocolKey]?.[metricType];
         if (shortenedProtocolTooltip && shortenedProtocolTooltip.trim().length > 0) {
-          console.log(`[Tooltip] Found tooltip using shortened protocol key "${shortenedProtocolKey}" for ${poolId} / ${metricType}`);
           return shortenedProtocolTooltip;
         }
       }
