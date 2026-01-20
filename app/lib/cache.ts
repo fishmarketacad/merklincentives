@@ -1,116 +1,48 @@
-import { createClient } from 'redis';
+import { Redis } from '@upstash/redis';
 
 /**
- * Cache utility for Redis
+ * Cache utility for Redis using Upstash SDK
  * Provides caching for Merkl campaigns, opportunities, TVL, and volume data
+ * Uses REST API - perfect for serverless environments
  */
 
-// Create Redis client singleton
-let redisClient: ReturnType<typeof createClient> | null = null;
-let connectionAttempted = false; // Track if we've already tried to connect
-let connectionFailed = false; // Track if connection failed (to avoid repeated attempts)
+// Initialize Redis client (reads from UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN)
+// Falls back to KV_REST_API_URL and KV_REST_API_TOKEN if Upstash env vars not found
+let redisClient: Redis | null = null;
 
 /**
- * Get or create Redis client
- * Returns null if connection fails (graceful fallback)
+ * Get Redis client instance
+ * Returns null if Upstash credentials are not available
  */
-async function getRedisClient() {
-  // Early exit if REDIS_URL is not set - no connection attempts
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) {
-    // Only warn once
-    if (!connectionAttempted) {
-      console.log('[Cache] Redis disabled - REDIS_URL not set. Caching skipped, app will work normally.');
-      connectionAttempted = true;
-    }
-    return null;
-  }
-
-  // If client exists and is open, return it
-  if (redisClient && redisClient.isOpen) {
+function getRedisClient(): Redis | null {
+  // Check if client already initialized
+  if (redisClient) {
     return redisClient;
   }
 
-  // If connection already failed, don't retry (prevents spam)
-  if (connectionFailed) {
-    return null;
-  }
+  // Check for Upstash environment variables
+  // Upstash SDK looks for: UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN
+  // Or: KV_REST_API_URL and KV_REST_API_TOKEN (Vercel KV naming)
+  const upstashUrl = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 
-  // If we've already attempted connection and it failed, skip
-  if (connectionAttempted && !redisClient) {
+  if (!upstashUrl || !upstashToken) {
+    console.log('[Cache] Redis disabled - Upstash env vars not set. Caching skipped, app will work normally.');
     return null;
   }
 
   try {
-    connectionAttempted = true;
-
-    // Redis Labs typically requires TLS - check if URL uses rediss://
-    const isTLS = redisUrl.startsWith('rediss://');
-    const isRedisLabs = redisUrl.includes('redislabs.com');
-    
-    // If it's Redis Labs but URL uses redis://, convert to rediss://
-    // IMPORTANT: When using rediss://, the protocol handles TLS automatically
-    // DO NOT set tls in socket config - it causes a conflict
-    const urlToUse = isRedisLabs && !isTLS 
-      ? redisUrl.replace('redis://', 'rediss://')
-      : redisUrl;
-    
-    // Socket config - never set TLS when using rediss:// (protocol handles it)
-    const socketConfig: any = {
-      connectTimeout: 20000, // 20 second timeout for Redis Labs (increased for TLS handshake)
-      reconnectStrategy: (retries: number) => {
-        if (retries > 1) {
-          // Stop retrying quickly to avoid spam
-          return false;
-        }
-        return 1000;
-      },
-    };
-
-    redisClient = createClient({
-      url: urlToUse,
-      socket: socketConfig,
+    // Initialize Upstash Redis client manually (supports both naming conventions)
+    // Uses REST API - no connection needed, perfect for serverless
+    redisClient = new Redis({
+      url: upstashUrl,
+      token: upstashToken,
     });
-
-    redisClient.on('error', (err) => {
-      // Only log first error to reduce noise
-      if (!connectionFailed) {
-        console.error('Redis Client Error:', err.message || err);
-        connectionFailed = true;
-      }
-      // Reset client on error
-      redisClient = null;
-    });
-
-    if (!redisClient.isOpen) {
-      // Connect with timeout matching socket config (20s)
-      await Promise.race([
-        redisClient.connect(),
-        new Promise((_, reject) => 
-          setTimeout(() => {
-            connectionFailed = true;
-            reject(new Error('Redis connection timeout - check IP whitelist in Redis Labs dashboard'));
-          }, 20000) // Match socket connectTimeout
-        ),
-      ]);
-    }
-
-    // Success - reset failure flag
-    connectionFailed = false;
+    console.log('[Cache] Upstash Redis client initialized');
     return redisClient;
   } catch (error: any) {
-    connectionFailed = true;
-    // Only log first failure with helpful message
-    if (connectionAttempted) {
-      const errorMsg = error.message || String(error);
-      if (errorMsg.includes('timeout') || errorMsg.includes('ECONNREFUSED')) {
-        console.warn('Redis connection failed. This is OK - caching disabled. If using Redis Labs, check IP whitelist in dashboard.');
-      } else {
-        console.error('Failed to connect to Redis:', errorMsg);
-      }
-    }
-    redisClient = null;
-    return null; // Return null instead of throwing - graceful fallback
+    console.error('[Cache] Failed to initialize Upstash Redis:', error.message || error);
+    return null;
   }
 }
 
@@ -126,24 +58,17 @@ const CACHE_TTL = {
 
 /**
  * Get cached value
+ * Upstash SDK automatically handles JSON serialization/deserialization
  */
 export async function getCache<T>(key: string): Promise<T | null> {
   try {
-    const client = await getRedisClient();
+    const client = getRedisClient();
     if (!client) {
       // Redis not available, return null (cache miss)
       return null;
     }
-    const value = await client.get(key);
-    if (value === null) {
-      return null;
-    }
-    // Parse JSON if it's a string, otherwise return as-is
-    try {
-      return JSON.parse(value) as T;
-    } catch {
-      return value as T;
-    }
+    const value = await client.get<T>(key);
+    return value;
   } catch (error) {
     console.error(`Cache get error for key ${key}:`, error);
     return null; // Graceful fallback - return null on error
@@ -152,17 +77,18 @@ export async function getCache<T>(key: string): Promise<T | null> {
 
 /**
  * Set cached value with TTL
+ * Upstash SDK automatically handles JSON serialization
  */
 export async function setCache<T>(key: string, value: T, ttl: number): Promise<void> {
   try {
-    const client = await getRedisClient();
+    const client = getRedisClient();
     if (!client) {
       // Redis not available, silently skip caching
       return;
     }
-    // Serialize value to JSON string
-    const serialized = typeof value === 'string' ? value : JSON.stringify(value);
-    await client.setEx(key, ttl, serialized);
+    // Upstash SDK handles JSON automatically
+    // Use set with ex option for expiration (ttl in seconds)
+    await client.set(key, value, { ex: ttl });
   } catch (error) {
     console.error(`Cache set error for key ${key}:`, error);
     // Don't throw - caching failures shouldn't break the app
