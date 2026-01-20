@@ -34,6 +34,16 @@ export function setCache(data: DashboardData): void {
   console.log('[DashboardCache] Cache updated for date:', data.cacheDate);
 }
 
+export function updateAIAnalysis(aiAnalysis: any): void {
+  if (cache) {
+    cache.aiAnalysis = aiAnalysis;
+    cache.timestamp = Date.now();
+    console.log('[DashboardCache] AI analysis updated in cache');
+  } else {
+    console.warn('[DashboardCache] Cannot update AI analysis - cache not initialized');
+  }
+}
+
 export function isCacheValid(targetDate: string): boolean {
   if (!cache) return false;
   const isValid = cache.cacheDate === targetDate;

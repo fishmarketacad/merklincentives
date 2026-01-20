@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { setCache } from '@/app/lib/dashboardCache';
+import { setCache, updateAIAnalysis } from '@/app/lib/dashboardCache';
 
 // Common protocols list (same as frontend)
 const commonProtocols = [
@@ -268,84 +268,7 @@ export async function GET(request: Request) {
 
     console.log('[Cron] Previous week data fetched, results:', prevMonSpentData.results?.length || 0);
 
-    // Prepare data for AI analysis
-    const periodDays = Math.floor((new Date(yesterday).getTime() - new Date(sevenDaysAgo).getTime()) / (1000 * 60 * 60 * 24)) + 1;
-
-    // Run AI analysis
-    let aiAnalysis = null;
-    try {
-      console.log('[Cron] Running AI analysis...');
-      const aiUrl = addBypassToUrl(`${baseUrl}/api/ai-analysis`);
-      console.log('[Cron] Fetching AI analysis...');
-      
-      const aiResponse = await fetchWithTimeout(aiUrl, {
-        method: 'POST',
-        headers: internalHeaders,
-        body: JSON.stringify({
-          currentWeek: {
-            pools: (monSpentData.results || []).flatMap((platform: any) =>
-              platform.fundingProtocols.flatMap((funding: any) =>
-                funding.markets.map((market: any) => ({
-                  protocol: platform.platformProtocol,
-                  fundingProtocol: funding.fundingProtocol,
-                  marketName: market.marketName,
-                  tokenPair: '',
-                  incentivesMON: market.totalMON,
-                  incentivesUSD: market.totalMON * monPrice,
-                  tvl: market.tvl || null,
-                  volume: null,
-                  apr: market.apr || null,
-                  tvlCost: null,
-                  wowChange: null,
-                  periodDays,
-                  merklUrl: market.merklUrl,
-                }))
-              )
-            ),
-            startDate: sevenDaysAgo,
-            endDate: yesterday,
-            monPrice,
-          },
-          previousWeek: {
-            pools: (prevMonSpentData.results || []).flatMap((platform: any) =>
-              platform.fundingProtocols.flatMap((funding: any) =>
-                funding.markets.map((market: any) => ({
-                  protocol: platform.platformProtocol,
-                  fundingProtocol: funding.fundingProtocol,
-                  marketName: market.marketName,
-                  tokenPair: '',
-                  incentivesMON: market.totalMON,
-                  incentivesUSD: market.totalMON * monPrice,
-                  tvl: market.tvl || null,
-                  volume: null,
-                  apr: market.apr || null,
-                  tvlCost: null,
-                  wowChange: null,
-                  periodDays,
-                }))
-              )
-            ),
-            startDate: prevStartDate,
-            endDate: prevEndDate,
-          },
-        includeAllData: true,
-      }),
-      });
-
-      if (aiResponse.ok) {
-        const aiData = await aiResponse.json();
-        aiAnalysis = aiData.analysis;
-        console.log('[Cron] AI analysis complete');
-      } else {
-        const errorData = await aiResponse.json();
-        console.error('[Cron] AI analysis failed:', errorData);
-      }
-    } catch (aiError) {
-      console.error('[Cron] AI analysis error:', aiError);
-      // Continue without AI analysis
-    }
-
-    // Store in cache
+    // Store in cache IMMEDIATELY (without AI analysis to avoid timeout)
     setCache({
       startDate: sevenDaysAgo,
       endDate: yesterday,
@@ -360,20 +283,98 @@ export async function GET(request: Request) {
       previousWeekProtocolTVL: prevTvlData.tvlData || {},
       previousWeekProtocolDEXVolume: prevTvlData.dexVolumeData || {},
       previousWeekMarketVolumes: {},
-      aiAnalysis,
+      aiAnalysis: null, // Will be updated asynchronously
       timestamp: Date.now(),
       cacheDate: yesterday, // Use yesterday as the cache key
     });
 
     const duration = Date.now() - startTime;
-    console.log('[Cron] Dashboard refresh complete in', duration, 'ms');
+    console.log('[Cron] Dashboard data cached in', duration, 'ms');
+
+    // Run AI analysis ASYNCHRONOUSLY (fire-and-forget)
+    // This prevents timeout - we return success immediately and update cache when AI completes
+    const periodDays = Math.floor((new Date(yesterday).getTime() - new Date(sevenDaysAgo).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    
+    (async () => {
+      try {
+        console.log('[Cron] Running AI analysis asynchronously...');
+        const aiUrl = addBypassToUrl(`${baseUrl}/api/ai-analysis`);
+        
+        const aiResponse = await fetchWithTimeout(aiUrl, {
+          method: 'POST',
+          headers: internalHeaders,
+          body: JSON.stringify({
+            currentWeek: {
+              pools: (monSpentData.results || []).flatMap((platform: any) =>
+                platform.fundingProtocols.flatMap((funding: any) =>
+                  funding.markets.map((market: any) => ({
+                    protocol: platform.platformProtocol,
+                    fundingProtocol: funding.fundingProtocol,
+                    marketName: market.marketName,
+                    tokenPair: '',
+                    incentivesMON: market.totalMON,
+                    incentivesUSD: market.totalMON * monPrice,
+                    tvl: market.tvl || null,
+                    volume: null,
+                    apr: market.apr || null,
+                    tvlCost: null,
+                    wowChange: null,
+                    periodDays,
+                    merklUrl: market.merklUrl,
+                  }))
+                )
+              ),
+              startDate: sevenDaysAgo,
+              endDate: yesterday,
+              monPrice,
+            },
+            previousWeek: {
+              pools: (prevMonSpentData.results || []).flatMap((platform: any) =>
+                platform.fundingProtocols.flatMap((funding: any) =>
+                  funding.markets.map((market: any) => ({
+                    protocol: platform.platformProtocol,
+                    fundingProtocol: funding.fundingProtocol,
+                    marketName: market.marketName,
+                    tokenPair: '',
+                    incentivesMON: market.totalMON,
+                    incentivesUSD: market.totalMON * monPrice,
+                    tvl: market.tvl || null,
+                    volume: null,
+                    apr: market.apr || null,
+                    tvlCost: null,
+                    wowChange: null,
+                    periodDays,
+                  }))
+                )
+              ),
+              startDate: prevStartDate,
+              endDate: prevEndDate,
+            },
+            includeAllData: true,
+          }),
+        }, 120000); // 2 minute timeout for AI analysis
+
+        if (aiResponse.ok) {
+          const aiData = await aiResponse.json();
+          updateAIAnalysis(aiData.analysis);
+          console.log('[Cron] AI analysis complete and cache updated');
+        } else {
+          const errorData = await aiResponse.json();
+          console.error('[Cron] AI analysis failed:', errorData);
+        }
+      } catch (aiError) {
+        console.error('[Cron] AI analysis error:', aiError);
+        // Cache already has data, AI analysis is optional
+      }
+    })(); // Fire-and-forget - don't await
 
     return NextResponse.json({
       success: true,
       date: yesterday,
       duration,
       poolsCount: monSpentData.results?.length || 0,
-      aiAnalysisIncluded: !!aiAnalysis,
+      aiAnalysisIncluded: false, // Will be updated asynchronously
+      message: 'Dashboard data cached. AI analysis running in background.',
     });
   } catch (error: any) {
     console.error('[Cron] Dashboard refresh failed:', error);
