@@ -405,14 +405,12 @@ function HomeContent() {
                   tvl = protocolTVL[protocolKey];
                 }
 
-                // Get volume from protocolDEXVolume
+                // Get volume from protocolDEXVolume (protocol-level)
                 const tokenPair = extractTokenPair(market.marketName);
                 let volume = null;
-                if (protocolDEXVolume[protocolKey] && tokenPair) {
-                  const volumeData = protocolDEXVolume[protocolKey][tokenPair];
-                  if (volumeData?.volumeInRange) {
-                    volume = volumeData.volumeInRange;
-                  }
+                const dexVolume = protocolDEXVolume[protocolKey];
+                if (dexVolume) {
+                  volume = dexVolume.volumeInRange ?? dexVolume.volume7d ?? dexVolume.volume30d ?? null;
                 }
 
                 // Calculate TVL Cost
@@ -463,13 +461,11 @@ function HomeContent() {
                   tvl = previousWeekProtocolTVL[protocolKey];
                 }
 
-                // Get volume from previousWeekProtocolDEXVolume
+                // Get volume from previousWeekProtocolDEXVolume (protocol-level)
                 let volume = null;
-                if (previousWeekProtocolDEXVolume[protocolKey] && tokenPair) {
-                  const volumeData = previousWeekProtocolDEXVolume[protocolKey][tokenPair];
-                  if (volumeData?.volumeInRange) {
-                    volume = volumeData.volumeInRange;
-                  }
+                const prevDexVolume = previousWeekProtocolDEXVolume[protocolKey];
+                if (prevDexVolume) {
+                  volume = prevDexVolume.volumeInRange ?? prevDexVolume.volume7d ?? prevDexVolume.volume30d ?? null;
                 }
 
                 const incentivesUSD = (market.totalMON || 0) * monPriceNum;
