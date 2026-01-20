@@ -119,13 +119,23 @@ export async function GET(request: Request) {
     } else {
       console.log('[Cron] Warning: VERCEL_AUTOMATION_BYPASS_SECRET not set, may hit protection');
     }
+    
+    // Helper to add bypass token to URL as query parameter (Vercel supports both header and query param)
+    function addBypassToUrl(url: string): string {
+      if (bypassSecret) {
+        const urlObj = new URL(url);
+        urlObj.searchParams.set('x-vercel-protection-bypass', bypassSecret);
+        return urlObj.toString();
+      }
+      return url;
+    }
 
     console.log('[Cron] Fetching current week data...');
     
     let monSpentResponse, tvlResponse;
     try {
       [monSpentResponse, tvlResponse] = await Promise.all([
-        fetch(`${baseUrl}/api/query-mon-spent`, {
+        fetch(addBypassToUrl(`${baseUrl}/api/query-mon-spent`), {
           method: 'POST',
           headers: internalHeaders,
           body: JSON.stringify({
@@ -135,7 +145,7 @@ export async function GET(request: Request) {
             token: 'WMON',
           }),
         }),
-        fetch(`${baseUrl}/api/protocol-tvl`, {
+        fetch(addBypassToUrl(`${baseUrl}/api/protocol-tvl`), {
           method: 'POST',
           headers: internalHeaders,
           body: JSON.stringify({
@@ -171,7 +181,7 @@ export async function GET(request: Request) {
     let prevMonSpentResponse, prevTvlResponse;
     try {
       [prevMonSpentResponse, prevTvlResponse] = await Promise.all([
-        fetch(`${baseUrl}/api/query-mon-spent`, {
+        fetch(addBypassToUrl(`${baseUrl}/api/query-mon-spent`), {
           method: 'POST',
           headers: internalHeaders,
           body: JSON.stringify({
@@ -181,7 +191,7 @@ export async function GET(request: Request) {
             token: 'WMON',
           }),
         }),
-        fetch(`${baseUrl}/api/protocol-tvl`, {
+        fetch(addBypassToUrl(`${baseUrl}/api/protocol-tvl`), {
           method: 'POST',
           headers: internalHeaders,
           body: JSON.stringify({
@@ -220,7 +230,7 @@ export async function GET(request: Request) {
     let aiAnalysis = null;
     try {
       console.log('[Cron] Running AI analysis...');
-      const aiResponse = await fetch(`${baseUrl}/api/ai-analysis`, {
+      const aiResponse = await fetch(addBypassToUrl(`${baseUrl}/api/ai-analysis`), {
         method: 'POST',
         headers: internalHeaders,
         body: JSON.stringify({
