@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// Configure max duration for AI analysis (5 minutes = 300 seconds)
+// This allows the function to run longer than the default 60s limit
+export const maxDuration = 300; // 5 minutes
+
 // API Configuration - supports both Grok (xAI) and Claude (Anthropic)
 // Set AI_PROVIDER environment variable to 'grok' or 'claude' (defaults to 'claude')
 const AI_PROVIDER = (process.env.AI_PROVIDER || 'grok').toLowerCase();
