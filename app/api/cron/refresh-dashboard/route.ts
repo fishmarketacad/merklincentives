@@ -570,13 +570,35 @@ export async function GET(request: NextRequest) {
       }
     })();
     
-    // Use waitUntil to keep function alive for background work (Vercel/Next.js feature)
-    if ('waitUntil' in request && typeof (request as any).waitUntil === 'function') {
-      (request as any).waitUntil(aiAnalysisPromise);
-      console.log('[Cron] Using waitUntil to keep function alive for AI analysis');
-    } else {
-      // Fallback: just start the promise (may be killed when function returns)
-      console.warn('[Cron] waitUntil not available, AI analysis may be terminated early');
+    // Vercel doesn't support waitUntil - we need to wait for AI analysis or trigger it separately
+    // For now, let's try to run it synchronously with a timeout
+    // If it takes too long, we'll return early and the frontend can trigger it manually
+    let aiAnalysisCompleted = false;
+    let aiAnalysisError: any = null;
+    
+    try {
+      // Wait up to 50 seconds for AI analysis (Vercel Pro plan has 60s limit)
+      const aiAnalysisWithTimeout = Promise.race([
+        aiAnalysisPromise,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('AI analysis timeout')), 50000)
+        )
+      ]);
+      
+      await aiAnalysisWithTimeout;
+      aiAnalysisCompleted = true;
+      console.log('[Cron] AI analysis completed synchronously');
+    } catch (timeoutError: any) {
+      if (timeoutError.message === 'AI analysis timeout') {
+        console.warn('[Cron] AI analysis timed out after 50s, continuing in background (may be killed)');
+        // Start it in background anyway - might work if function stays alive
+        aiAnalysisPromise.catch((err) => {
+          console.error('[Cron] Background AI analysis failed:', err);
+        });
+      } else {
+        aiAnalysisError = timeoutError;
+        console.error('[Cron] AI analysis error:', timeoutError);
+      }
     }
 
     return NextResponse.json({
@@ -584,8 +606,11 @@ export async function GET(request: NextRequest) {
       date: yesterday,
       duration,
       poolsCount: monSpentData.results?.length || 0,
-      aiAnalysisIncluded: false, // Will be updated asynchronously
-      message: 'Dashboard data cached. AI analysis running in background.',
+      aiAnalysisIncluded: aiAnalysisCompleted,
+      aiAnalysisError: aiAnalysisError?.message || null,
+      message: aiAnalysisCompleted 
+        ? 'Dashboard data cached. AI analysis completed.'
+        : 'Dashboard data cached. AI analysis may still be running.',
     });
   } catch (error: any) {
     console.error('[Cron] Dashboard refresh failed:', error);
