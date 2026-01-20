@@ -179,7 +179,7 @@ export async function GET(request: Request) {
             endDate: yesterday,
             token: 'WMON',
           }),
-        }, 60000), // 60 second timeout
+        }, 90000), // 90 second timeout (Redis retries can cause delays)
         fetchWithTimeout(tvlUrl, {
           method: 'POST',
           headers: internalHeaders,
@@ -188,7 +188,7 @@ export async function GET(request: Request) {
             startDate: sevenDaysAgo,
             endDate: yesterday,
           }),
-        }, 60000), // 60 second timeout
+        }, 90000), // 90 second timeout
       ]);
       
       console.log('[Cron] Responses received:', {
@@ -235,7 +235,7 @@ export async function GET(request: Request) {
             endDate: prevEndDate,
             token: 'WMON',
           }),
-        }, 60000),
+        }, 90000), // 90 second timeout (Redis retries can cause delays)
         fetchWithTimeout(prevTvlUrl, {
           method: 'POST',
           headers: internalHeaders,
@@ -244,7 +244,7 @@ export async function GET(request: Request) {
             startDate: prevStartDate,
             endDate: prevEndDate,
           }),
-        }, 60000),
+        }, 90000), // 90 second timeout
       ]);
     } catch (fetchError: any) {
       console.error('[Cron] Previous week fetch error:', fetchError);
