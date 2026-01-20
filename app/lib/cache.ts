@@ -51,9 +51,9 @@ const CACHE_TTL = {
   MERKL_CAMPAIGNS: 21600,           // 6 hours - campaigns change infrequently
   MERKL_OPPORTUNITIES: 21600,       // 6 hours - opportunities change infrequently
   DEFILLAMA_TVL_CURRENT: 21600,    // 6 hours - current TVL changes slowly
-  DEFILLAMA_TVL_HISTORICAL: 2592000, // 30 days - historical TVL never changes
-  DUNE_VOLUME: 2592000,             // 30 days - volumes are historical and never change
-  MERKL_CAMPAIGNS_HISTORICAL: 2592000, // 30 days - historical campaigns never change
+  DEFILLAMA_TVL_HISTORICAL: 604800, // 7 days - historical TVL never changes (reduced from 30 days)
+  DUNE_VOLUME: 604800,             // 7 days - volumes are historical (reduced from 30 days)
+  MERKL_CAMPAIGNS_HISTORICAL: 604800, // 7 days - historical campaigns (reduced from 30 days)
 };
 
 /**
