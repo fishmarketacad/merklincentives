@@ -401,8 +401,8 @@ function HomeContent() {
 
                 // Get TVL from protocolTVL (prefer protocol-level TVL over market-level)
                 let tvl = market.tvl || null;
-                if (protocolTVL[protocolKey]?.tvl) {
-                  tvl = protocolTVL[protocolKey].tvl;
+                if (protocolTVL[protocolKey]) {
+                  tvl = protocolTVL[protocolKey];
                 }
 
                 // Get volume from protocolDEXVolume
@@ -459,8 +459,8 @@ function HomeContent() {
 
                 // Get TVL from previousWeekProtocolTVL
                 let tvl = market.tvl || null;
-                if (previousWeekProtocolTVL[protocolKey]?.tvl) {
-                  tvl = previousWeekProtocolTVL[protocolKey].tvl;
+                if (previousWeekProtocolTVL[protocolKey]) {
+                  tvl = previousWeekProtocolTVL[protocolKey];
                 }
 
                 // Get volume from previousWeekProtocolDEXVolume
