@@ -71,11 +71,24 @@ export async function GET(request: Request) {
     console.log('[Cron] Request URL:', request.url);
     console.log('[Cron] VERCEL_AUTOMATION_BYPASS_SECRET available:', !!process.env.VERCEL_AUTOMATION_BYPASS_SECRET);
 
-    // Verify this is a cron request (Vercel adds this header)
+    // Verify this is a cron request
+    // Vercel Cron Jobs add 'x-vercel-cron' header
+    // Manual/GitHub Actions calls use 'authorization' header with CRON_SECRET
+    const vercelCronHeader = request.headers.get('x-vercel-cron');
     const authHeader = request.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      console.log('[Cron] Unauthorized request');
+    
+    const isVercelCron = vercelCronHeader === '1';
+    const isAuthorized = !process.env.CRON_SECRET || authHeader === `Bearer ${process.env.CRON_SECRET}`;
+    
+    if (!isVercelCron && !isAuthorized) {
+      console.log('[Cron] Unauthorized request - missing x-vercel-cron header or valid authorization');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    
+    if (isVercelCron) {
+      console.log('[Cron] Request from Vercel Cron Job');
+    } else {
+      console.log('[Cron] Request from manual/GitHub Actions');
     }
 
     // Calculate dates
