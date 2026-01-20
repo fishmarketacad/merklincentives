@@ -335,16 +335,240 @@ function HomeContent() {
     initializeDashboard();
   }, [searchParams]);
 
-  // Poll for AI analysis updates if it's missing but cache exists
+  // Auto-trigger AI analysis and poll for updates if it's missing but cache exists
   useEffect(() => {
-    // Only poll if:
+    // Only run if:
     // 1. Dashboard is initialized
     // 2. AI analysis is null
     // 3. We have results (cache was loaded)
-    // 4. Cache is recent (within last 5 minutes)
     if (!isInitialized || aiAnalysis !== null || results.length === 0) {
       return;
     }
+
+    let aiTriggered = false;
+
+    const triggerAIAnalysis = async () => {
+      if (aiTriggered) return; // Only trigger once
+      aiTriggered = true;
+
+      try {
+        console.log('[AI Auto-Trigger] AI analysis missing, triggering automatically...');
+        setAiLoading(true);
+        setAiError('');
+
+        // Prepare AI analysis data (same logic as cron job)
+        const prepareAIData = () => {
+          // Helper: Extract token pair from market name
+          const extractTokenPair = (marketName: string): string => {
+            const match = marketName.match(/([A-Z0-9]+)[-\/]([A-Z0-9]+)/);
+            if (match) {
+              return `${match[1]}-${match[2]}`;
+            }
+            return '';
+          };
+
+          // Helper: Calculate TVL Cost
+          const calculateTVLCost = (incentivesUSD: number, tvl: number, days: number): number | null => {
+            if (!tvl || tvl === 0 || !incentivesUSD) return null;
+            const annualizedIncentives = (incentivesUSD / days) * 365;
+            return (annualizedIncentives / tvl) * 100;
+          };
+
+          // Create a map to find previous week pools
+          const prevPoolMap = new Map<string, any>();
+          (previousWeekResults || []).forEach((platform: any) => {
+            platform.fundingProtocols?.forEach((funding: any) => {
+              funding.markets?.forEach((market: any) => {
+                const key = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`;
+                prevPoolMap.set(key.toLowerCase(), {
+                  protocol: platform.platformProtocol,
+                  fundingProtocol: funding.fundingProtocol,
+                  marketName: market.marketName,
+                  incentivesMON: market.totalMON || 0,
+                  incentivesUSD: (market.totalMON || 0) * monPriceNum,
+                  tvl: market.tvl || null,
+                });
+              });
+            });
+          });
+
+          // Prepare current week pools
+          const currentPools = (results || []).flatMap((platform: any) =>
+            platform.fundingProtocols.flatMap((funding: any) =>
+              funding.markets.map((market: any) => {
+                const protocolKey = platform.platformProtocol.toLowerCase();
+                const marketKey = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`.toLowerCase();
+
+                // Get TVL from protocolTVL (prefer protocol-level TVL over market-level)
+                let tvl = market.tvl || null;
+                if (protocolTVL[protocolKey]?.tvl) {
+                  tvl = protocolTVL[protocolKey].tvl;
+                }
+
+                // Get volume from protocolDEXVolume
+                const tokenPair = extractTokenPair(market.marketName);
+                let volume = null;
+                if (protocolDEXVolume[protocolKey] && tokenPair) {
+                  const volumeData = protocolDEXVolume[protocolKey][tokenPair];
+                  if (volumeData?.volumeInRange) {
+                    volume = volumeData.volumeInRange;
+                  }
+                }
+
+                // Calculate TVL Cost
+                const incentivesUSD = (market.totalMON || 0) * monPriceNum;
+                const tvlCost = calculateTVLCost(incentivesUSD, tvl || 0, periodDays);
+
+                // Find previous week pool
+                const prevPool = prevPoolMap.get(marketKey);
+                let wowChange = null;
+                if (prevPool && tvlCost !== null) {
+                  const prevTvl = prevPool.tvl || null;
+                  const prevIncentivesUSD = prevPool.incentivesUSD || 0;
+                  const prevTVLCost = calculateTVLCost(prevIncentivesUSD, prevTvl || 0, periodDays);
+                  if (prevTVLCost !== null && prevTVLCost !== 0) {
+                    wowChange = ((tvlCost - prevTVLCost) / prevTVLCost) * 100;
+                  }
+                }
+
+                return {
+                  protocol: platform.platformProtocol,
+                  fundingProtocol: funding.fundingProtocol,
+                  marketName: market.marketName,
+                  tokenPair,
+                  incentivesMON: market.totalMON || 0,
+                  incentivesUSD,
+                  tvl,
+                  volume,
+                  apr: market.apr || null,
+                  tvlCost,
+                  wowChange,
+                  periodDays,
+                  merklUrl: market.merklUrl || null,
+                };
+              })
+            )
+          );
+
+          // Prepare previous week pools
+          const previousPools = (previousWeekResults || []).flatMap((platform: any) =>
+            platform.fundingProtocols.flatMap((funding: any) =>
+              funding.markets.map((market: any) => {
+                const protocolKey = platform.platformProtocol.toLowerCase();
+                const tokenPair = extractTokenPair(market.marketName);
+
+                // Get TVL from previousWeekProtocolTVL
+                let tvl = market.tvl || null;
+                if (previousWeekProtocolTVL[protocolKey]?.tvl) {
+                  tvl = previousWeekProtocolTVL[protocolKey].tvl;
+                }
+
+                // Get volume from previousWeekProtocolDEXVolume
+                let volume = null;
+                if (previousWeekProtocolDEXVolume[protocolKey] && tokenPair) {
+                  const volumeData = previousWeekProtocolDEXVolume[protocolKey][tokenPair];
+                  if (volumeData?.volumeInRange) {
+                    volume = volumeData.volumeInRange;
+                  }
+                }
+
+                const incentivesUSD = (market.totalMON || 0) * monPriceNum;
+                const tvlCost = calculateTVLCost(incentivesUSD, tvl || 0, periodDays);
+
+                return {
+                  protocol: platform.platformProtocol,
+                  fundingProtocol: funding.fundingProtocol,
+                  marketName: market.marketName,
+                  tokenPair,
+                  incentivesMON: market.totalMON || 0,
+                  incentivesUSD,
+                  tvl,
+                  volume,
+                  apr: market.apr || null,
+                  tvlCost,
+                  wowChange: null,
+                  periodDays,
+                };
+              })
+            )
+          );
+
+          return { currentPools, previousPools };
+        };
+
+        const { currentPools, previousPools } = prepareAIData();
+
+        console.log('[AI Auto-Trigger] Prepared', currentPools.length, 'current pools and', previousPools.length, 'previous pools');
+
+        // Calculate previous week dates
+        const getPreviousWeekDates = (start: string, end: string) => {
+          const startDate = new Date(start + 'T00:00:00Z');
+          const endDate = new Date(end + 'T00:00:00Z');
+          const daysDiff = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+          const prevEnd = new Date(startDate);
+          prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+
+          const prevStart = new Date(prevEnd);
+          prevStart.setUTCDate(prevStart.getUTCDate() - daysDiff + 1);
+
+          return {
+            prevStartDate: prevStart.toISOString().split('T')[0],
+            prevEndDate: prevEnd.toISOString().split('T')[0],
+          };
+        };
+
+        const { prevStartDate, prevEndDate } = getPreviousWeekDates(startDate, endDate);
+
+        // Call AI analysis endpoint
+        const response = await fetch('/api/ai-analysis', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            currentWeek: {
+              pools: currentPools,
+              startDate,
+              endDate,
+              monPrice: monPriceNum,
+            },
+            previousWeek: {
+              pools: previousPools,
+              startDate: prevStartDate,
+              endDate: prevEndDate,
+            },
+            includeAllData: true,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'AI analysis failed');
+        }
+
+        const aiData = await response.json();
+
+        if (aiData.analysis) {
+          console.log('[AI Auto-Trigger] ✅ AI analysis complete!');
+          setAiAnalysis(aiData.analysis);
+          setAiLoading(false);
+
+          // Update localStorage
+          const localCache = loadDashboardCache();
+          if (localCache) {
+            localCache.aiAnalysis = aiData.analysis;
+            saveDashboardCache(localCache);
+          }
+        } else {
+          throw new Error('AI analysis response missing analysis field');
+        }
+      } catch (error: any) {
+        console.error('[AI Auto-Trigger] ❌ Error:', error);
+        setAiError(error.message || 'Failed to generate AI analysis');
+        setAiLoading(false);
+      }
+    };
 
     const checkForAIAnalysis = async () => {
       try {
@@ -354,6 +578,7 @@ function HomeContent() {
         if (response.ok && data.success && data.cached && data.data?.aiAnalysis) {
           console.log('[AI Poll] AI analysis now available, updating...');
           setAiAnalysis(data.data.aiAnalysis);
+          setAiLoading(false);
           // Also update localStorage
           const localCache = loadDashboardCache();
           if (localCache) {
@@ -366,21 +591,32 @@ function HomeContent() {
       }
     };
 
-    // Check immediately, then every 15 seconds
+    // First, check if AI analysis is already being generated by cron
     checkForAIAnalysis();
-    const interval = setInterval(checkForAIAnalysis, 15000); // Poll every 15 seconds
 
-    // Stop polling after 5 minutes (AI analysis should be done by then)
+    // Wait 5 seconds to see if cron has already started AI analysis
+    const triggerTimeout = setTimeout(() => {
+      if (aiAnalysis === null && !aiLoading) {
+        // No AI analysis found after 5 seconds, trigger it ourselves
+        triggerAIAnalysis();
+      }
+    }, 5000);
+
+    // Continue polling every 15 seconds
+    const interval = setInterval(checkForAIAnalysis, 15000);
+
+    // Stop polling after 5 minutes
     const timeout = setTimeout(() => {
       clearInterval(interval);
       console.log('[AI Poll] Stopped polling for AI analysis after 5 minutes');
     }, 5 * 60 * 1000);
 
     return () => {
+      clearTimeout(triggerTimeout);
       clearInterval(interval);
       clearTimeout(timeout);
     };
-  }, [isInitialized, aiAnalysis, results.length]);
+  }, [isInitialized, aiAnalysis, results.length, previousWeekResults, protocolTVL, protocolDEXVolume, previousWeekProtocolTVL, previousWeekProtocolDEXVolume, monPriceNum, periodDays, startDate, endDate]);
   
   // Update URL parameters when state changes (but not during initialization)
   useEffect(() => {
@@ -2020,6 +2256,24 @@ function HomeContent() {
             {aiError && (
               <div className="mb-4 p-3 bg-red-900/30 border-2 border-red-500/50 rounded-lg text-red-300 text-sm font-medium">
                 {aiError}
+              </div>
+            )}
+
+            {/* AI Analysis Loading Message */}
+            {aiLoading && !aiAnalysis && (
+              <div className="mb-4 p-4 bg-purple-900/20 border-2 border-purple-500/50 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <svg className="animate-spin h-5 w-5 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <div>
+                    <div className="text-purple-200 font-semibold">Generating AI Analysis...</div>
+                    <div className="text-purple-300/70 text-sm mt-1">
+                      Analyzing incentive efficiency and identifying trends (this may take 30-90 seconds)
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
