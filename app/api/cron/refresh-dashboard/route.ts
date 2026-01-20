@@ -72,31 +72,53 @@ export async function GET(request: Request) {
     console.log('[Cron] VERCEL_AUTOMATION_BYPASS_SECRET available:', !!process.env.VERCEL_AUTOMATION_BYPASS_SECRET);
 
     // Verify this is a cron request
-    // Vercel Cron Jobs add 'x-vercel-cron' header (value can be '1' or any truthy value)
-    // Manual/GitHub Actions calls use 'authorization' header with CRON_SECRET
+    // Vercel Cron Jobs may send 'x-vercel-cron' header, but it's not always reliable
+    // Check for Vercel-specific indicators or require authorization
     const vercelCronHeader = request.headers.get('x-vercel-cron');
     const authHeader = request.headers.get('authorization');
+    const host = request.headers.get('host') || '';
     
-    // Check if this is a Vercel Cron Job (header exists, regardless of value)
-    const isVercelCron = !!vercelCronHeader;
+    // Parse hostname from request URL (more reliable than host header)
+    let requestHostname = '';
+    try {
+      const url = new URL(request.url);
+      requestHostname = url.hostname;
+    } catch {
+      // If URL parsing fails, use host header
+      requestHostname = host;
+    }
+    
+    // Check if this is a Vercel Cron Job
+    // Vercel cron jobs come from vercel.app domains and may send x-vercel-cron header
+    const isVercelDomain = host.includes('vercel.app') || requestHostname.includes('vercel.app');
+    const isVercelCron = !!vercelCronHeader || isVercelDomain;
     
     // Check if this is an authorized manual call
-    const isAuthorized = !process.env.CRON_SECRET || authHeader === `Bearer ${process.env.CRON_SECRET}`;
+    const isAuthorized = process.env.CRON_SECRET && authHeader === `Bearer ${process.env.CRON_SECRET}`;
     
-    // Allow if: Vercel cron job OR authorized manual call
-    if (!isVercelCron && !isAuthorized) {
+    // Allow if:
+    // 1. Vercel Cron Job (from vercel.app domain OR has x-vercel-cron header)
+    // 2. Authorized manual call (has valid CRON_SECRET)
+    const shouldAllow = isVercelCron || isAuthorized;
+    
+    if (!shouldAllow) {
       console.log('[Cron] Unauthorized request');
       console.log('[Cron] Headers:', {
         'x-vercel-cron': vercelCronHeader,
         'authorization': authHeader ? 'present' : 'missing',
+        'host': host,
+        'requestHostname': requestHostname,
         'CRON_SECRET set': !!process.env.CRON_SECRET,
+        'isVercelDomain': isVercelDomain,
+        'isVercelCron': isVercelCron,
+        'isAuthorized': isAuthorized,
       });
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     
-    if (isVercelCron) {
-      console.log('[Cron] Request from Vercel Cron Job (header value:', vercelCronHeader, ')');
-    } else {
+    if (isVercelCron && !isAuthorized) {
+      console.log('[Cron] Request from Vercel Cron Job');
+    } else if (isAuthorized) {
       console.log('[Cron] Request from manual/GitHub Actions');
     }
 
