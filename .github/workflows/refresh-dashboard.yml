@@ -1,0 +1,57 @@
+name: Refresh Dashboard Cache
+
+on:
+  schedule:
+    # Run daily at midnight UTC (00:00 UTC)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions UI
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call refresh endpoint
+        env:
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          # Get the Vercel deployment URL from secrets
+          # If not set, try to use the default Vercel URL pattern
+          if [ -z "$VERCEL_URL" ]; then
+            echo "Warning: VERCEL_URL secret not set. Using default pattern."
+            echo "Please set VERCEL_URL secret to your actual deployment URL"
+            echo "Example: https://merklincentives.vercel.app"
+            exit 1
+          fi
+          
+          if [ -z "$CRON_SECRET" ]; then
+            echo "Error: CRON_SECRET secret not set"
+            echo "Please set CRON_SECRET secret in GitHub repository settings"
+            exit 1
+          fi
+          
+          # Remove trailing slash if present
+          VERCEL_URL="${VERCEL_URL%/}"
+          
+          echo "Calling refresh endpoint at: ${VERCEL_URL}/api/cron/refresh-dashboard"
+          
+          # Call the refresh endpoint with authentication
+          response=$(curl -s -w "\n%{http_code}" -X GET \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${VERCEL_URL}/api/cron/refresh-dashboard")
+          
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          
+          echo "Response code: $http_code"
+          echo "Response body: $body"
+          
+          # Exit with error if not successful
+          if [ "$http_code" -ne 200 ]; then
+            echo "Error: Refresh endpoint returned $http_code"
+            echo "Response: $body"
+            exit 1
+          fi
+          
+          echo "✅ Dashboard refresh completed successfully!"
