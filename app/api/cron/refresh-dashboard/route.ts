@@ -69,6 +69,7 @@ export async function GET(request: Request) {
   try {
     console.log('[Cron] Starting dashboard refresh...');
     console.log('[Cron] Request URL:', request.url);
+    console.log('[Cron] VERCEL_AUTOMATION_BYPASS_SECRET available:', !!process.env.VERCEL_AUTOMATION_BYPASS_SECRET);
 
     // Verify this is a cron request (Vercel adds this header)
     const authHeader = request.headers.get('authorization');
@@ -125,17 +126,46 @@ export async function GET(request: Request) {
       if (bypassSecret) {
         const urlObj = new URL(url);
         urlObj.searchParams.set('x-vercel-protection-bypass', bypassSecret);
+        console.log('[Cron] Added bypass token to URL:', urlObj.pathname);
         return urlObj.toString();
       }
+      console.log('[Cron] No bypass token available, URL unchanged');
       return url;
+    }
+    
+    // Helper to create fetch with timeout
+    async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 30000): Promise<Response> {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      
+      try {
+        const response = await fetch(url, {
+          ...options,
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        return response;
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+          throw new Error(`Request timeout after ${timeoutMs}ms`);
+        }
+        throw error;
+      }
     }
 
     console.log('[Cron] Fetching current week data...');
     
     let monSpentResponse, tvlResponse;
     try {
+      const monSpentUrl = addBypassToUrl(`${baseUrl}/api/query-mon-spent`);
+      const tvlUrl = addBypassToUrl(`${baseUrl}/api/protocol-tvl`);
+      
+      console.log('[Cron] Fetching MON spent from:', monSpentUrl.replace(/x-vercel-protection-bypass=[^&]+/, 'x-vercel-protection-bypass=***'));
+      console.log('[Cron] Fetching TVL from:', tvlUrl.replace(/x-vercel-protection-bypass=[^&]+/, 'x-vercel-protection-bypass=***'));
+      
       [monSpentResponse, tvlResponse] = await Promise.all([
-        fetch(addBypassToUrl(`${baseUrl}/api/query-mon-spent`), {
+        fetchWithTimeout(monSpentUrl, {
           method: 'POST',
           headers: internalHeaders,
           body: JSON.stringify({
@@ -144,8 +174,8 @@ export async function GET(request: Request) {
             endDate: yesterday,
             token: 'WMON',
           }),
-        }),
-        fetch(addBypassToUrl(`${baseUrl}/api/protocol-tvl`), {
+        }, 60000), // 60 second timeout
+        fetchWithTimeout(tvlUrl, {
           method: 'POST',
           headers: internalHeaders,
           body: JSON.stringify({
@@ -153,8 +183,13 @@ export async function GET(request: Request) {
             startDate: sevenDaysAgo,
             endDate: yesterday,
           }),
-        }),
+        }, 60000), // 60 second timeout
       ]);
+      
+      console.log('[Cron] Responses received:', {
+        monSpent: monSpentResponse.status,
+        tvl: tvlResponse.status,
+      });
     } catch (fetchError: any) {
       console.error('[Cron] Fetch error:', fetchError);
       throw new Error(`Failed to fetch data from ${baseUrl}: ${fetchError.message || 'Unknown error'}`);
@@ -180,8 +215,13 @@ export async function GET(request: Request) {
     // Fetch previous week data
     let prevMonSpentResponse, prevTvlResponse;
     try {
+      const prevMonSpentUrl = addBypassToUrl(`${baseUrl}/api/query-mon-spent`);
+      const prevTvlUrl = addBypassToUrl(`${baseUrl}/api/protocol-tvl`);
+      
+      console.log('[Cron] Fetching previous week data...');
+      
       [prevMonSpentResponse, prevTvlResponse] = await Promise.all([
-        fetch(addBypassToUrl(`${baseUrl}/api/query-mon-spent`), {
+        fetchWithTimeout(prevMonSpentUrl, {
           method: 'POST',
           headers: internalHeaders,
           body: JSON.stringify({
@@ -190,8 +230,8 @@ export async function GET(request: Request) {
             endDate: prevEndDate,
             token: 'WMON',
           }),
-        }),
-        fetch(addBypassToUrl(`${baseUrl}/api/protocol-tvl`), {
+        }, 60000),
+        fetchWithTimeout(prevTvlUrl, {
           method: 'POST',
           headers: internalHeaders,
           body: JSON.stringify({
@@ -199,7 +239,7 @@ export async function GET(request: Request) {
             startDate: prevStartDate,
             endDate: prevEndDate,
           }),
-        }),
+        }, 60000),
       ]);
     } catch (fetchError: any) {
       console.error('[Cron] Previous week fetch error:', fetchError);
@@ -230,7 +270,10 @@ export async function GET(request: Request) {
     let aiAnalysis = null;
     try {
       console.log('[Cron] Running AI analysis...');
-      const aiResponse = await fetch(addBypassToUrl(`${baseUrl}/api/ai-analysis`), {
+      const aiUrl = addBypassToUrl(`${baseUrl}/api/ai-analysis`);
+      console.log('[Cron] Fetching AI analysis...');
+      
+      const aiResponse = await fetchWithTimeout(aiUrl, {
         method: 'POST',
         headers: internalHeaders,
         body: JSON.stringify({
