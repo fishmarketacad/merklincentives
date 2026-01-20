@@ -580,10 +580,7 @@ export async function GET(request: NextRequest) {
       duration,
       poolsCount: monSpentData.results?.length || 0,
       aiAnalysisIncluded: false, // Will be updated asynchronously
-      aiAnalysisError: aiAnalysisError?.message || null,
-      message: aiAnalysisCompleted 
-        ? 'Dashboard data cached. AI analysis completed.'
-        : 'Dashboard data cached. AI analysis may still be running.',
+      message: 'Dashboard data cached. AI analysis running in background.',
     });
   } catch (error: any) {
     console.error('[Cron] Dashboard refresh failed:', error);
