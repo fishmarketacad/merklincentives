@@ -72,21 +72,30 @@ export async function GET(request: Request) {
     console.log('[Cron] VERCEL_AUTOMATION_BYPASS_SECRET available:', !!process.env.VERCEL_AUTOMATION_BYPASS_SECRET);
 
     // Verify this is a cron request
-    // Vercel Cron Jobs add 'x-vercel-cron' header
+    // Vercel Cron Jobs add 'x-vercel-cron' header (value can be '1' or any truthy value)
     // Manual/GitHub Actions calls use 'authorization' header with CRON_SECRET
     const vercelCronHeader = request.headers.get('x-vercel-cron');
     const authHeader = request.headers.get('authorization');
     
-    const isVercelCron = vercelCronHeader === '1';
+    // Check if this is a Vercel Cron Job (header exists, regardless of value)
+    const isVercelCron = !!vercelCronHeader;
+    
+    // Check if this is an authorized manual call
     const isAuthorized = !process.env.CRON_SECRET || authHeader === `Bearer ${process.env.CRON_SECRET}`;
     
+    // Allow if: Vercel cron job OR authorized manual call
     if (!isVercelCron && !isAuthorized) {
-      console.log('[Cron] Unauthorized request - missing x-vercel-cron header or valid authorization');
+      console.log('[Cron] Unauthorized request');
+      console.log('[Cron] Headers:', {
+        'x-vercel-cron': vercelCronHeader,
+        'authorization': authHeader ? 'present' : 'missing',
+        'CRON_SECRET set': !!process.env.CRON_SECRET,
+      });
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     
     if (isVercelCron) {
-      console.log('[Cron] Request from Vercel Cron Job');
+      console.log('[Cron] Request from Vercel Cron Job (header value:', vercelCronHeader, ')');
     } else {
       console.log('[Cron] Request from manual/GitHub Actions');
     }
@@ -282,7 +291,7 @@ export async function GET(request: Request) {
     console.log('[Cron] Previous week data fetched, results:', prevMonSpentData.results?.length || 0);
 
     // Store in cache IMMEDIATELY (without AI analysis to avoid timeout)
-    setCache({
+    await setCache({
       startDate: sevenDaysAgo,
       endDate: yesterday,
       monPrice,
@@ -369,7 +378,7 @@ export async function GET(request: Request) {
 
         if (aiResponse.ok) {
           const aiData = await aiResponse.json();
-          updateAIAnalysis(aiData.analysis);
+          await updateAIAnalysis(aiData.analysis);
           console.log('[Cron] AI analysis complete and cache updated');
         } else {
           const errorData = await aiResponse.json();

@@ -10,10 +10,10 @@ function getYesterdayUTC(): string {
 export async function GET() {
   try {
     const yesterday = getYesterdayUTC();
-    const cache = getCache();
+    const cache = await getCache();
 
     // Check if cache exists and is valid
-    if (cache && isCacheValid(yesterday)) {
+    if (cache && await isCacheValid(yesterday)) {
       console.log('[Dashboard Default] Serving cached data for', yesterday);
       return NextResponse.json({
         success: true,
