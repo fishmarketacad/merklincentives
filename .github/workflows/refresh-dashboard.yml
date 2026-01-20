@@ -55,3 +55,17 @@ jobs:
           fi
           
           echo "✅ Dashboard refresh completed successfully!"
+          
+          # Parse and display key metrics from response
+          if command -v jq &> /dev/null; then
+            echo ""
+            echo "Refresh Summary:"
+            echo "$body" | jq -r '
+              "Date: \(.date // "N/A")
+Pools Count: \(.poolsCount // 0)
+AI Analysis: \(if .aiAnalysisIncluded then "Yes" else "No" end)
+Duration: \(.duration // 0)ms"
+            '
+          else
+            echo "Response: $body"
+          fi
