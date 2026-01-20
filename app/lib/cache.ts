@@ -15,6 +15,17 @@ let connectionFailed = false; // Track if connection failed (to avoid repeated a
  * Returns null if connection fails (graceful fallback)
  */
 async function getRedisClient() {
+  // Early exit if REDIS_URL is not set - no connection attempts
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) {
+    // Only warn once
+    if (!connectionAttempted) {
+      console.log('[Cache] Redis disabled - REDIS_URL not set. Caching skipped, app will work normally.');
+      connectionAttempted = true;
+    }
+    return null;
+  }
+
   // If client exists and is open, return it
   if (redisClient && redisClient.isOpen) {
     return redisClient;
@@ -22,16 +33,6 @@ async function getRedisClient() {
 
   // If connection already failed, don't retry (prevents spam)
   if (connectionFailed) {
-    return null;
-  }
-
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisUrl) {
-    // Only warn once
-    if (!connectionAttempted) {
-      console.warn('REDIS_URL not set, caching disabled');
-      connectionAttempted = true;
-    }
     return null;
   }
 
