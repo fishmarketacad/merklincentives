@@ -285,7 +285,7 @@ function HomeContent() {
               console.log('[Init] No cache available, triggering fresh fetch');
               setStartDate(sevenDaysAgo);
               setEndDate(yesterday);
-              setProtocols(commonProtocols);
+              setProtocols([]);
 
               const price = await fetchMonPrice();
               setMonPrice(price);
@@ -319,7 +319,7 @@ function HomeContent() {
           } else {
             setStartDate(sevenDaysAgo);
             setEndDate(yesterday);
-            setProtocols(commonProtocols);
+            setProtocols([]);
 
             const price = await fetchMonPrice();
             setMonPrice(price);
@@ -730,6 +730,14 @@ function HomeContent() {
         ? prev.filter(p => p !== protocol)
         : [...prev, protocol]
     );
+  };
+
+  const selectAllProtocols = () => {
+    setProtocols(commonProtocols);
+  };
+
+  const deselectAllProtocols = () => {
+    setProtocols([]);
   };
 
   // Fetch protocol TVL from DeFiLlama
@@ -2147,9 +2155,27 @@ function HomeContent() {
 
           {/* Protocol Selection */}
           <div className="mb-6">
-            <label className="block text-sm font-semibold text-gray-300 mb-3 uppercase tracking-wide">
-              Select Protocols
-            </label>
+            <div className="flex items-center justify-between mb-3">
+              <label className="block text-sm font-semibold text-gray-300 uppercase tracking-wide">
+                Select Protocols
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={selectAllProtocols}
+                  type="button"
+                  className="px-3 py-1 text-xs font-medium text-purple-400 border border-purple-500/50 rounded hover:bg-purple-500/10 transition-colors"
+                >
+                  Select All
+                </button>
+                <button
+                  onClick={deselectAllProtocols}
+                  type="button"
+                  className="px-3 py-1 text-xs font-medium text-gray-400 border border-gray-600 rounded hover:bg-gray-700/30 transition-colors"
+                >
+                  Deselect All
+                </button>
+              </div>
+            </div>
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
               {commonProtocols.map(protocol => (
                 <label
