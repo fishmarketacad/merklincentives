@@ -1548,6 +1548,7 @@ function HomeContent() {
       const protocolRows = groupedByProtocol[protocol];
       let protocolTotalMON = 0;
       let protocolTotalUSD = 0;
+      let protocolTotalTVL = 0;
       let protocolTotalVolume = 0;
 
       // Add rows for this protocol
@@ -1561,9 +1562,12 @@ function HomeContent() {
           : 0;
         const usdFormatted = incentiveUSD > 0 ? incentiveUSD.toFixed(2) : '';
 
-        // Track totals for subtotal row
+        // Track totals for subtotal row (sum of individual pools)
         protocolTotalMON += row.market.totalMON;
         protocolTotalUSD += incentiveUSD;
+        if (row.market.tvl !== null && row.market.tvl !== undefined && row.market.tvl > 0) {
+          protocolTotalTVL += row.market.tvl;
+        }
         if (row.volumeValue !== null && row.volumeValue !== undefined) {
           protocolTotalVolume += row.volumeValue;
         }
@@ -1599,33 +1603,29 @@ function HomeContent() {
         );
       }
 
-      // Add subtotal row for this protocol
+      // Add SUBTOTAL row - sum of individual pool values
       const subtotalMON = protocolTotalMON.toFixed(2);
       const subtotalUSD = protocolTotalUSD > 0 ? protocolTotalUSD.toFixed(2) : '';
-
-      // Use protocol-level TVL from DeFiLlama (not sum of individual pool TVLs)
-      const protocolKey = protocol.toLowerCase();
-      const protocolTVLValue = protocolTVL[protocolKey];
-      const subtotalTVL = protocolTVLValue !== null && protocolTVLValue !== undefined && protocolTVLValue > 0
-        ? protocolTVLValue.toFixed(2)
-        : '';
-
-      // For pancakeswap (and other aggregated protocols), use protocol-level volume from protocolDEXVolume
-      // since pool-level volume is not available
-      let subtotalVolume = '';
-      const dexVolume = protocolDEXVolume[protocolKey];
-
-      if (protocol.toLowerCase() === 'pancake-swap' && dexVolume) {
-        // Use protocol-level volume for pancakeswap (aggregated only)
-        const protocolVolume = dexVolume.volumeInRange ?? dexVolume.volume7d ?? dexVolume.volume30d ?? null;
-        subtotalVolume = protocolVolume !== null ? protocolVolume.toFixed(2) : '';
-      } else {
-        // Use sum of pool-level volumes for other protocols
-        subtotalVolume = protocolTotalVolume > 0 ? protocolTotalVolume.toFixed(2) : '';
-      }
+      const subtotalTVL = protocolTotalTVL > 0 ? protocolTotalTVL.toFixed(2) : '';
+      const subtotalVolume = protocolTotalVolume > 0 ? protocolTotalVolume.toFixed(2) : '';
 
       csvLines.push(
         `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}","${subtotalTVL}",,,\"${subtotalVolume}\",,`
+      );
+
+      // Add PROTOCOL TOTAL row - protocol-level data from DeFiLlama/Dune APIs
+      const protocolKey = protocol.toLowerCase();
+      const protocolTVLValue = protocolTVL[protocolKey];
+      const protocolTVLFormatted = protocolTVLValue !== null && protocolTVLValue !== undefined && protocolTVLValue > 0
+        ? protocolTVLValue.toFixed(2)
+        : '';
+
+      const dexVolume = protocolDEXVolume[protocolKey];
+      const protocolVolume = dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
+      const protocolVolumeFormatted = protocolVolume !== null ? protocolVolume.toFixed(2) : '';
+
+      csvLines.push(
+        `${protocol} PROTOCOL TOTAL,,,,,\"${protocolTVLFormatted}\",,,\"${protocolVolumeFormatted}\",,`
       );
     }
 
