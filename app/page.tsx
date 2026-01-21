@@ -1548,7 +1548,6 @@ function HomeContent() {
       const protocolRows = groupedByProtocol[protocol];
       let protocolTotalMON = 0;
       let protocolTotalUSD = 0;
-      let protocolTotalTVL = 0;
       let protocolTotalVolume = 0;
 
       // Add rows for this protocol
@@ -1565,9 +1564,6 @@ function HomeContent() {
         // Track totals for subtotal row
         protocolTotalMON += row.market.totalMON;
         protocolTotalUSD += incentiveUSD;
-        if (row.market.tvl !== null && row.market.tvl !== undefined && row.market.tvl > 0) {
-          protocolTotalTVL += row.market.tvl;
-        }
         if (row.volumeValue !== null && row.volumeValue !== undefined) {
           protocolTotalVolume += row.volumeValue;
         }
@@ -1606,12 +1602,17 @@ function HomeContent() {
       // Add subtotal row for this protocol
       const subtotalMON = protocolTotalMON.toFixed(2);
       const subtotalUSD = protocolTotalUSD > 0 ? protocolTotalUSD.toFixed(2) : '';
-      const subtotalTVL = protocolTotalTVL > 0 ? protocolTotalTVL.toFixed(2) : '';
+
+      // Use protocol-level TVL from DeFiLlama (not sum of individual pool TVLs)
+      const protocolKey = protocol.toLowerCase();
+      const protocolTVLValue = protocolTVL[protocolKey];
+      const subtotalTVL = protocolTVLValue !== null && protocolTVLValue !== undefined && protocolTVLValue > 0
+        ? protocolTVLValue.toFixed(2)
+        : '';
 
       // For pancakeswap (and other aggregated protocols), use protocol-level volume from protocolDEXVolume
       // since pool-level volume is not available
       let subtotalVolume = '';
-      const protocolKey = protocol.toLowerCase();
       const dexVolume = protocolDEXVolume[protocolKey];
 
       if (protocol.toLowerCase() === 'pancake-swap' && dexVolume) {
