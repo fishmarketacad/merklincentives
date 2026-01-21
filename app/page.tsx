@@ -1530,42 +1530,76 @@ function HomeContent() {
     const dateRangeFormatted = `${startDateFormatted} - ${endDateFormatted}`;
 
     const csvLines = [
-      `Platform Protocol,Funding Protocol,Market,Incentive,"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
+      `Platform Protocol,Funding Protocol,Market,Incentive (MON),Incentive (USD),"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
     ];
-    
-    // Use processedTableRows to get all calculated values including TVL Cost, Volume Cost, and WoW changes
+
+    // Group rows by platform protocol for subtotals
+    const groupedByProtocol: { [protocol: string]: typeof processedTableRows } = {};
     for (const row of processedTableRows) {
-      // Format MON value - use toFixed to avoid commas in CSV
-      const monFormatted = row.market.totalMON.toFixed(2);
-      
-      // Format TVL value - use Merkl market-level TVL
-      const tvlFormatted = row.market.tvl !== null && row.market.tvl !== undefined && row.market.tvl > 0
-        ? row.market.tvl.toFixed(2)
-        : '';
-      
-      // Format TVL Cost
-      const tvlCostFormatted = row.tvlCost !== null ? row.tvlCost.toFixed(2) : '';
-      
-      // Format TVL Cost WoW Change
-      const tvlCostWoWFormatted = row.wowChange !== null 
-        ? `${row.wowChange > 0 ? '+' : ''}${row.wowChange.toFixed(2)}`
-        : '';
-      
-      // Format Volume value
-      const volumeFormatted = row.volumeValue !== null && row.volumeValue !== undefined
-        ? row.volumeValue.toFixed(2)
-        : '';
-      
-      // Format Volume Cost
-      const volumeCostFormatted = row.volumeCost !== null ? row.volumeCost.toFixed(2) : '';
-      
-      // Format Volume Cost WoW Change
-      const volumeCostWoWFormatted = row.volumeWowChange !== null
-        ? `${row.volumeWowChange > 0 ? '+' : ''}${row.volumeWowChange.toFixed(2)}`
-        : '';
-      
+      const protocol = row.platform.platformProtocol;
+      if (!groupedByProtocol[protocol]) {
+        groupedByProtocol[protocol] = [];
+      }
+      groupedByProtocol[protocol].push(row);
+    }
+
+    // Process each protocol group
+    for (const protocol of Object.keys(groupedByProtocol)) {
+      const protocolRows = groupedByProtocol[protocol];
+      let protocolTotalMON = 0;
+      let protocolTotalUSD = 0;
+
+      // Add rows for this protocol
+      for (const row of protocolRows) {
+        // Format MON value - use toFixed to avoid commas in CSV
+        const monFormatted = row.market.totalMON.toFixed(2);
+
+        // Format USD value
+        const incentiveUSD = !isNaN(monPriceNum) && monPriceNum > 0
+          ? row.market.totalMON * monPriceNum
+          : 0;
+        const usdFormatted = incentiveUSD > 0 ? incentiveUSD.toFixed(2) : '';
+
+        // Track totals for subtotal row
+        protocolTotalMON += row.market.totalMON;
+        protocolTotalUSD += incentiveUSD;
+
+        // Format TVL value - use Merkl market-level TVL
+        const tvlFormatted = row.market.tvl !== null && row.market.tvl !== undefined && row.market.tvl > 0
+          ? row.market.tvl.toFixed(2)
+          : '';
+
+        // Format TVL Cost
+        const tvlCostFormatted = row.tvlCost !== null ? row.tvlCost.toFixed(2) : '';
+
+        // Format TVL Cost WoW Change
+        const tvlCostWoWFormatted = row.wowChange !== null
+          ? `${row.wowChange > 0 ? '+' : ''}${row.wowChange.toFixed(2)}`
+          : '';
+
+        // Format Volume value
+        const volumeFormatted = row.volumeValue !== null && row.volumeValue !== undefined
+          ? row.volumeValue.toFixed(2)
+          : '';
+
+        // Format Volume Cost
+        const volumeCostFormatted = row.volumeCost !== null ? row.volumeCost.toFixed(2) : '';
+
+        // Format Volume Cost WoW Change
+        const volumeCostWoWFormatted = row.volumeWowChange !== null
+          ? `${row.volumeWowChange > 0 ? '+' : ''}${row.volumeWowChange.toFixed(2)}`
+          : '';
+
+        csvLines.push(
+          `${row.platform.platformProtocol},${row.funding.fundingProtocol},"${row.market.marketName}",${monFormatted},"${usdFormatted}","${tvlFormatted}","${tvlCostFormatted}","${tvlCostWoWFormatted}","${volumeFormatted}","${volumeCostFormatted}","${volumeCostWoWFormatted}"`
+        );
+      }
+
+      // Add subtotal row for this protocol
+      const subtotalMON = protocolTotalMON.toFixed(2);
+      const subtotalUSD = protocolTotalUSD > 0 ? protocolTotalUSD.toFixed(2) : '';
       csvLines.push(
-        `${row.platform.platformProtocol},${row.funding.fundingProtocol},"${row.market.marketName}",${monFormatted},"${tvlFormatted}","${tvlCostFormatted}","${tvlCostWoWFormatted}","${volumeFormatted}","${volumeCostFormatted}","${volumeCostWoWFormatted}"`
+        `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}",,,,,,`
       );
     }
 
