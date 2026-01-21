@@ -1607,7 +1607,22 @@ function HomeContent() {
       const subtotalMON = protocolTotalMON.toFixed(2);
       const subtotalUSD = protocolTotalUSD > 0 ? protocolTotalUSD.toFixed(2) : '';
       const subtotalTVL = protocolTotalTVL > 0 ? protocolTotalTVL.toFixed(2) : '';
-      const subtotalVolume = protocolTotalVolume > 0 ? protocolTotalVolume.toFixed(2) : '';
+
+      // For pancakeswap (and other aggregated protocols), use protocol-level volume from protocolDEXVolume
+      // since pool-level volume is not available
+      let subtotalVolume = '';
+      const protocolKey = protocol.toLowerCase();
+      const dexVolume = protocolDEXVolume[protocolKey];
+
+      if (protocol.toLowerCase() === 'pancake-swap' && dexVolume) {
+        // Use protocol-level volume for pancakeswap (aggregated only)
+        const protocolVolume = dexVolume.volumeInRange ?? dexVolume.volume7d ?? dexVolume.volume30d ?? null;
+        subtotalVolume = protocolVolume !== null ? protocolVolume.toFixed(2) : '';
+      } else {
+        // Use sum of pool-level volumes for other protocols
+        subtotalVolume = protocolTotalVolume > 0 ? protocolTotalVolume.toFixed(2) : '';
+      }
+
       csvLines.push(
         `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}","${subtotalTVL}",,,\"${subtotalVolume}\",,`
       );
