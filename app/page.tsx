@@ -722,6 +722,7 @@ function HomeContent() {
     'beefy',
     'accountable',
     'curve',
+    'lfj', // LFJ DEX - shows TVL/Volume even without Merkl incentives
   ];
 
   const toggleProtocol = (protocol: string) => {

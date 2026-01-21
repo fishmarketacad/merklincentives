@@ -18,6 +18,7 @@ const commonProtocols = [
   'beefy',
   'accountable',
   'curve',
+  'lfj', // LFJ DEX - shows TVL/Volume even without Merkl incentives
 ];
 
 // Date utilities
