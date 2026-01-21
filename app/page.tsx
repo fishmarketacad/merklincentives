@@ -236,7 +236,7 @@ function HomeContent() {
             const cache = data.data;
             setStartDate(cache.startDate);
             setEndDate(cache.endDate);
-            setProtocols(cache.protocols);
+            // Don't restore protocols - always start with none selected
             setMonPrice(cache.monPrice.toString());
             setResults(cache.results);
             setPreviousWeekResults(cache.previousWeekResults);
@@ -268,7 +268,7 @@ function HomeContent() {
               console.log('[Init] Using localStorage cache');
               setStartDate(localCache!.startDate);
               setEndDate(localCache!.endDate);
-              setProtocols(localCache!.protocols);
+              // Don't restore protocols - always start with none selected
               setMonPrice(localCache!.monPrice);
               setResults(localCache!.results);
               setPreviousWeekResults(localCache!.previousWeekResults);
@@ -304,7 +304,7 @@ function HomeContent() {
             console.log('[Init] Using localStorage cache after server error');
             setStartDate(localCache!.startDate);
             setEndDate(localCache!.endDate);
-            setProtocols(localCache!.protocols);
+            // Don't restore protocols - always start with none selected
             setMonPrice(localCache!.monPrice);
             setResults(localCache!.results);
             setPreviousWeekResults(localCache!.previousWeekResults);
