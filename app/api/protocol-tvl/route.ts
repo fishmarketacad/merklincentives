@@ -25,7 +25,7 @@ const PROTOCOL_SLUG_MAP: Record<string, string> = {
   'townsquare': 'townsquare',
   'beefy': 'beefy',
   'accountable': 'accountable',
-  'curve': 'curve',
+  'curve': 'curve-dex', // DeFiLlama uses "curve-dex" slug
 };
 
 // Map protocols to Dune query IDs
