@@ -1548,6 +1548,8 @@ function HomeContent() {
       const protocolRows = groupedByProtocol[protocol];
       let protocolTotalMON = 0;
       let protocolTotalUSD = 0;
+      let protocolTotalTVL = 0;
+      let protocolTotalVolume = 0;
 
       // Add rows for this protocol
       for (const row of protocolRows) {
@@ -1563,6 +1565,12 @@ function HomeContent() {
         // Track totals for subtotal row
         protocolTotalMON += row.market.totalMON;
         protocolTotalUSD += incentiveUSD;
+        if (row.market.tvl !== null && row.market.tvl !== undefined && row.market.tvl > 0) {
+          protocolTotalTVL += row.market.tvl;
+        }
+        if (row.volumeValue !== null && row.volumeValue !== undefined) {
+          protocolTotalVolume += row.volumeValue;
+        }
 
         // Format TVL value - use Merkl market-level TVL
         const tvlFormatted = row.market.tvl !== null && row.market.tvl !== undefined && row.market.tvl > 0
@@ -1598,8 +1606,10 @@ function HomeContent() {
       // Add subtotal row for this protocol
       const subtotalMON = protocolTotalMON.toFixed(2);
       const subtotalUSD = protocolTotalUSD > 0 ? protocolTotalUSD.toFixed(2) : '';
+      const subtotalTVL = protocolTotalTVL > 0 ? protocolTotalTVL.toFixed(2) : '';
+      const subtotalVolume = protocolTotalVolume > 0 ? protocolTotalVolume.toFixed(2) : '';
       csvLines.push(
-        `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}",,,,,,`
+        `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}","${subtotalTVL}",,,\"${subtotalVolume}\",,`
       );
     }
 
