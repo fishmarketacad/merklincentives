@@ -139,6 +139,8 @@ function HomeContent() {
   const [previousWeekProtocolDEXVolume, setPreviousWeekProtocolDEXVolume] = useState<ProtocolDEXVolume>({});
   const [previousWeekMarketVolumes, setPreviousWeekMarketVolumes] = useState<MarketVolumes>({});
   const [aiAnalysis, setAiAnalysis] = useState<any>(null);
+  const [aiPrompt, setAiPrompt] = useState<string | null>(null);
+  const [aiInputData, setAiInputData] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' | null }>({ key: null, direction: null });
@@ -573,6 +575,8 @@ function HomeContent() {
         if (aiData.analysis) {
           console.log('[AI Auto-Trigger] ✅ AI analysis complete!');
           setAiAnalysis(aiData.analysis);
+          setAiPrompt(aiData.prompt || null);
+          setAiInputData(aiData.inputData || null);
           setAiLoading(false);
 
           // Update localStorage (only for current session)
@@ -2347,6 +2351,216 @@ function HomeContent() {
     };
   };
 
+  // Download complete analysis data as JSON (all protocols)
+  const downloadAllProtocolsJSON = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      console.log('[Download JSON] Fetching all protocols data...');
+
+      // Get all common protocols
+      const allProtocols = commonProtocols;
+
+      // Fetch current week data for all protocols
+      const currentWeekResponse = await fetch('/api/query-mon-spent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          protocols: allProtocols,
+          startDate,
+          endDate,
+          token: 'MON',
+        }),
+      });
+
+      if (!currentWeekResponse.ok) {
+        throw new Error('Failed to fetch current week data');
+      }
+
+      const currentWeekData = await currentWeekResponse.json();
+
+      // Fetch protocol TVL for all protocols
+      const tvlResponse = await fetch('/api/protocol-tvl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          protocols: allProtocols,
+          endDate,
+        }),
+      });
+
+      const tvlData = tvlResponse.ok ? await tvlResponse.json() : {};
+
+      // Calculate previous week dates
+      const getPrevDates = (start: string, end: string) => {
+        const startDate = new Date(start + 'T00:00:00Z');
+        const endDate = new Date(end + 'T00:00:00Z');
+        const daysDiff = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+        const prevEnd = new Date(startDate);
+        prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+
+        const prevStart = new Date(prevEnd);
+        prevStart.setUTCDate(prevStart.getUTCDate() - daysDiff + 1);
+
+        return {
+          prevStartDate: prevStart.toISOString().split('T')[0],
+          prevEndDate: prevEnd.toISOString().split('T')[0],
+        };
+      };
+
+      const { prevStartDate, prevEndDate } = getPrevDates(startDate, endDate);
+
+      // Fetch previous week data
+      const previousWeekResponse = await fetch('/api/query-mon-spent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          protocols: allProtocols,
+          startDate: prevStartDate,
+          endDate: prevEndDate,
+          token: 'MON',
+        }),
+      });
+
+      const previousWeekData = previousWeekResponse.ok ? await previousWeekResponse.json() : { results: [] };
+
+      // Fetch previous week TVL
+      const prevTvlResponse = await fetch('/api/protocol-tvl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          protocols: allProtocols,
+          endDate: prevEndDate,
+        }),
+      });
+
+      const prevTvlData = prevTvlResponse.ok ? await prevTvlResponse.json() : {};
+
+      const monPriceNum = parseFloat(monPrice);
+      const periodDays = Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+      // Helper function
+      const calculateTVLCostHelper = (incentivesUSD: number, tvl: number, days: number): number | null => {
+        if (!tvl || tvl === 0 || !incentivesUSD) return null;
+        const annualizedIncentives = (incentivesUSD / days) * 365;
+        return (annualizedIncentives / tvl) * 100;
+      };
+
+      // Process current week pools
+      const currentPools = currentWeekData.results.flatMap((platform: any) =>
+        platform.fundingProtocols.flatMap((funding: any) =>
+          funding.markets.map((market: any) => {
+            const incentivesUSD = !isNaN(monPriceNum) && monPriceNum > 0 ? market.totalMON * monPriceNum : null;
+            const tvlCost = market.tvl && incentivesUSD
+              ? calculateTVLCostHelper(incentivesUSD, market.tvl, periodDays)
+              : null;
+
+            return {
+              protocol: platform.platformProtocol,
+              fundingProtocol: funding.fundingProtocol,
+              marketName: market.marketName,
+              incentivesMON: market.totalMON,
+              incentivesUSD,
+              tvl: market.tvl || null,
+              volume: null, // Volume data not included in simple structure
+              apr: market.apr || null,
+              tvlCost,
+              wowChange: null, // Will be calculated if needed
+              periodDays,
+              merklUrl: market.merklUrl || null,
+            };
+          })
+        )
+      );
+
+      // Process previous week pools
+      const previousPools = previousWeekData.results.flatMap((platform: any) =>
+        platform.fundingProtocols.flatMap((funding: any) =>
+          funding.markets.map((market: any) => {
+            const incentivesUSD = !isNaN(monPriceNum) && monPriceNum > 0 ? market.totalMON * monPriceNum : null;
+            const tvlCost = market.tvl && incentivesUSD
+              ? calculateTVLCostHelper(incentivesUSD, market.tvl, periodDays)
+              : null;
+
+            return {
+              protocol: platform.platformProtocol,
+              fundingProtocol: funding.fundingProtocol,
+              marketName: market.marketName,
+              incentivesMON: market.totalMON,
+              incentivesUSD,
+              tvl: market.tvl || null,
+              volume: null,
+              apr: market.apr || null,
+              tvlCost,
+              wowChange: null,
+              periodDays,
+            };
+          })
+        )
+      );
+
+      // Calculate global context
+      const totalMON = currentPools.reduce((sum: number, pool: any) => sum + pool.incentivesMON, 0);
+      const totalUSD = currentPools.reduce((sum: number, pool: any) => sum + (pool.incentivesUSD || 0), 0);
+      const totalTVL = currentPools.reduce((sum: number, pool: any) => sum + (pool.tvl || 0), 0);
+      const avgTVLCost = currentPools.filter((p: any) => p.tvlCost !== null).reduce((sum: number, pool: any, _: number, arr: any[]) => sum + (pool.tvlCost || 0) / arr.length, 0);
+
+      // Build complete JSON structure
+      const jsonData = {
+        metadata: {
+          generatedAt: new Date().toISOString(),
+          dateRange: {
+            currentWeek: { start: startDate, end: endDate },
+            previousWeek: { start: prevStartDate, end: prevEndDate },
+          },
+          monPrice: monPriceNum,
+          periodDays,
+          protocolsAnalyzed: allProtocols.length,
+          totalPoolsAnalyzed: currentPools.length,
+        },
+        globalContext: {
+          totalMONDistributed: totalMON,
+          totalUSDDistributed: totalUSD,
+          totalTVL: totalTVL,
+          averageTVLCost: avgTVLCost,
+        },
+        currentWeek: {
+          pools: currentPools,
+          protocolTVL: tvlData.protocolTVL || {},
+          protocolDEXVolume: tvlData.protocolDEXVolume || {},
+          startDate,
+          endDate,
+          monPrice: monPriceNum,
+        },
+        previousWeek: {
+          pools: previousPools,
+          protocolTVL: prevTvlData.protocolTVL || {},
+          protocolDEXVolume: prevTvlData.protocolDEXVolume || {},
+          startDate: prevStartDate,
+          endDate: prevEndDate,
+        },
+      };
+
+      // Download JSON file
+      const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `merkl-analysis-data-${startDate}-${endDate}.json`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+
+      console.log('[Download JSON] ✅ Complete! Downloaded', currentPools.length, 'pools across', allProtocols.length, 'protocols');
+    } catch (err: any) {
+      console.error('[Download JSON] Error:', err);
+      setError(err.message || 'Failed to download analysis data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle bulk protocol analysis
   const handleBulkAnalysis = async () => {
     if (protocols.length === 0) {
@@ -2474,6 +2688,8 @@ function HomeContent() {
       }
 
       setAiAnalysis(data.analysis);
+      setAiPrompt(data.prompt || null);
+      setAiInputData(data.inputData || null);
       setAiError(''); // Clear any previous errors on success
       console.log('[AI Analysis] Analysis set successfully. Keys:', Object.keys(data.analysis || {}));
       console.log('[AI Analysis] wowExplanations count:', data.analysis?.wowExplanations?.length || 0);
@@ -2513,6 +2729,70 @@ function HomeContent() {
     } finally {
       setAiLoading(false);
     }
+  };
+
+  // Download AI prompt and input data for Claude Code
+  const downloadAIPrompt = () => {
+    if (!aiPrompt) {
+      alert('No AI prompt available. Please run AI analysis first.');
+      return;
+    }
+
+    // Get the full input data that was sent to the API
+    const fullInputData = prepareAIData();
+
+    const downloadData = {
+      metadata: {
+        generatedAt: new Date().toISOString(),
+        dateRange: {
+          start: startDate,
+          end: endDate,
+        },
+        protocols: protocols.length > 0 ? protocols.join(', ') : 'All protocols',
+        monPrice: monPrice || 'Not provided',
+        inputDataSummary: aiInputData,
+      },
+      prompt: aiPrompt,
+      inputData: fullInputData, // Include the full input data
+    };
+
+    // Format as a readable text file for Claude Code
+    const textContent = `# AI Analysis Prompt and Input Data
+
+## Metadata
+- Generated At: ${downloadData.metadata.generatedAt}
+- Date Range: ${downloadData.metadata.dateRange.start} to ${downloadData.metadata.dateRange.end}
+- Protocols: ${downloadData.metadata.protocols}
+- MON Price: ${downloadData.metadata.monPrice}
+- Input Data Summary: ${JSON.stringify(downloadData.metadata.inputDataSummary, null, 2)}
+
+---
+
+## Full AI Prompt
+
+${aiPrompt}
+
+---
+
+## Full Input Data Sent to API (JSON)
+
+This is the complete data structure that was sent to the AI analysis API, including all pool data:
+
+\`\`\`json
+${JSON.stringify(fullInputData, null, 2)}
+\`\`\`
+`;
+
+    // Create blob and download
+    const blob = new Blob([textContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ai-prompt-${startDate}-to-${endDate}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -2664,20 +2944,20 @@ function HomeContent() {
               )}
             </button>
             <button
-              onClick={handleBulkAnalysis}
-              disabled={loading || analyzing || protocols.length === 0}
+              onClick={downloadAllProtocolsJSON}
+              disabled={loading || !startDate || !endDate}
               className="bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-6 rounded-lg font-semibold text-lg hover:from-blue-500 hover:to-blue-600 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-blue-500/50 transform hover:scale-[1.02] active:scale-[0.98]"
             >
-              {analyzing ? (
+              {loading ? (
                 <span className="flex items-center justify-center">
                   <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  Analyzing...
+                  Downloading...
                 </span>
               ) : (
-                'Analyze'
+                'Download JSON'
               )}
             </button>
           </div>
@@ -2799,30 +3079,48 @@ function HomeContent() {
                       </svg>
                       AI Analysis Insights
                     </h3>
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const analysisText = JSON.stringify(aiAnalysis, null, 2);
-                        navigator.clipboard.writeText(analysisText);
-                        // Show temporary feedback
-                        const btn = e.currentTarget;
-                        const originalHTML = btn.innerHTML;
-                        btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Copied!';
-                        btn.classList.add('bg-green-500');
-                        setTimeout(() => {
-                          btn.innerHTML = originalHTML;
-                          btn.classList.remove('bg-green-500');
-                        }, 2000);
-                      }}
-                      className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2"
-                      title="Copy analysis to clipboard"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                      Copy
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const analysisText = JSON.stringify(aiAnalysis, null, 2);
+                          navigator.clipboard.writeText(analysisText);
+                          // Show temporary feedback
+                          const btn = e.currentTarget;
+                          const originalHTML = btn.innerHTML;
+                          btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Copied!';
+                          btn.classList.add('bg-green-500');
+                          setTimeout(() => {
+                            btn.innerHTML = originalHTML;
+                            btn.classList.remove('bg-green-500');
+                          }, 2000);
+                        }}
+                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2"
+                        title="Copy analysis to clipboard"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                        Copy
+                      </button>
+                      {aiPrompt && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            downloadAIPrompt();
+                          }}
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors flex items-center gap-2"
+                          title="Download prompt and input data for Claude Code"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          Download Prompt
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </summary>
 
@@ -3072,21 +3370,6 @@ function HomeContent() {
                     </th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
                       <div className="group relative inline-block ml-auto cursor-help">
-                        <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('volume'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
-                          Volume ({startDate} - {endDate})
-                          {sortConfig.key === 'volume' && (
-                            <span className="text-purple-400">
-                              {sortConfig.direction === 'asc' ? '↑' : sortConfig.direction === 'desc' ? '↓' : ''}
-                            </span>
-                          )}
-                        </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
-                          Trading volume for this specific pool during the date range. Fetched from Dune Analytics (Monad-specific). Shows "Not Found" if data unavailable.
-                        </div>
-                      </div>
-                    </th>
-                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
-                      <div className="group relative inline-block ml-auto cursor-help">
                         <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('tvlCost'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
                           TVL Cost (%)
                           {sortConfig.key === 'tvlCost' && (
@@ -3112,6 +3395,21 @@ function HomeContent() {
                         </button>
                         <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Week-over-week percentage change in TVL Cost. Negative (green) is better (cost decreased). Red: &gt;10% increase, Green: &lt;-10% decrease
+                        </div>
+                      </div>
+                    </th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
+                      <div className="group relative inline-block ml-auto cursor-help">
+                        <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('volume'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
+                          Volume ({startDate} - {endDate})
+                          {sortConfig.key === 'volume' && (
+                            <span className="text-purple-400">
+                              {sortConfig.direction === 'asc' ? '↑' : sortConfig.direction === 'desc' ? '↓' : ''}
+                            </span>
+                          )}
+                        </button>
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
+                          Trading volume for this specific pool during the date range. Fetched from Dune Analytics (Monad-specific). Shows "Not Found" if data unavailable.
                         </div>
                       </div>
                     </th>
@@ -3215,25 +3513,6 @@ function HomeContent() {
                                 return value;
                               })()}
                             </td>
-                            <td className="py-3 px-4 text-sm text-right text-gray-300">
-                              {(() => {
-                                if (row.volumeError) {
-                                  return <span className="text-red-400 text-xs" title={row.volumeError}>Not Found</span>;
-                                }
-                                if (!row.volumeValue) return '-';
-                                const value = `$${(row.volumeValue / 1000000).toFixed(2)}M`;
-                                const change = row.volumeChange;
-                                if (change !== null) {
-                                  const changeColor = change > 10 ? 'text-green-400' : change < -10 ? 'text-red-400' : 'text-gray-400';
-                                  return (
-                                    <span>
-                                      {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
-                                    </span>
-                                  );
-                                }
-                                return value;
-                              })()}
-                            </td>
                             <td className={`py-3 px-4 text-sm text-right font-medium ${
                               row.tvlCost && row.tvlCost > 50 ? 'text-red-400' : row.tvlCost && row.tvlCost > 20 ? 'text-yellow-400' : 'text-green-400'
                             }`}>
@@ -3278,6 +3557,25 @@ function HomeContent() {
                                   );
                                 }
                                 return content;
+                              })()}
+                            </td>
+                            <td className="py-3 px-4 text-sm text-right text-gray-300">
+                              {(() => {
+                                if (row.volumeError) {
+                                  return <span className="text-red-400 text-xs" title={row.volumeError}>Not Found</span>;
+                                }
+                                if (!row.volumeValue) return '-';
+                                const value = `$${(row.volumeValue / 1000000).toFixed(2)}M`;
+                                const change = row.volumeChange;
+                                if (change !== null) {
+                                  const changeColor = change > 10 ? 'text-green-400' : change < -10 ? 'text-red-400' : 'text-gray-400';
+                                  return (
+                                    <span>
+                                      {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
+                                    </span>
+                                  );
+                                }
+                                return value;
                               })()}
                             </td>
                             <td className={`py-3 px-4 text-sm text-right font-medium ${

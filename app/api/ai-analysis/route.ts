@@ -9,7 +9,7 @@ export const maxDuration = 300; // 5 minutes
 // ============================================================================
 // Options: 'grok' or 'claude'
 // To switch providers, simply change the value below:
-const AI_PROVIDER = (process.env.AI_PROVIDER || 'claude').toLowerCase();
+const AI_PROVIDER = (process.env.AI_PROVIDER || 'grok').toLowerCase();
 // 
 // Examples:
 //   const AI_PROVIDER = (process.env.AI_PROVIDER || 'grok').toLowerCase();   // Use Grok
@@ -1726,6 +1726,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         analysis,
+        prompt, // Include the full prompt for download
+        inputData: {
+          protocolData,
+          includeAllData,
+          allCampaigns: allCampaigns ? allCampaigns.length : 0,
+          allOpportunities: allOpportunities ? allOpportunities.length : 0,
+        },
         type: 'bulk-protocol-analysis',
       });
     }
@@ -1765,6 +1772,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       analysis,
+      prompt, // Include the full prompt for download
+      inputData: {
+        currentWeek,
+        previousWeek,
+        includeAllData,
+        allCampaigns: allCampaigns ? allCampaigns.length : 0,
+        allOpportunities: allOpportunities ? allOpportunities.length : 0,
+      },
       type: 'pool-level-analysis',
     });
   } catch (error: any) {
