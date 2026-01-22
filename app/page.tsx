@@ -143,6 +143,7 @@ function HomeContent() {
   const [aiError, setAiError] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' | null }>({ key: null, direction: null });
   const [isAutoLoading, setIsAutoLoading] = useState(false);
+  const [enhancedCsvLoading, setEnhancedCsvLoading] = useState(false);
 
   // Memoized computed values
   const periodDays = useMemo(() => {
@@ -719,10 +720,11 @@ function HomeContent() {
     'upshift',
     'townsquare',
     'uniswap', // Added: Uniswap protocol
-    'beefy',
+    'Beefy', // Capital B - Merkl API uses "Beefy" not "beefy"
     'accountable',
     'curve',
     'lfj', // LFJ DEX - shows TVL/Volume even without Merkl incentives
+    'wlfi', // WLFI - appears as funding protocol only
   ];
 
   const toggleProtocol = (protocol: string) => {
@@ -1531,7 +1533,7 @@ function HomeContent() {
     const dateRangeFormatted = `${startDateFormatted} - ${endDateFormatted}`;
 
     const csvLines = [
-      `Platform Protocol,Funding Protocol,Market,Incentive (MON),Incentive (USD),"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
+      `Platform Protocol,Funding Protocol,Market,Incentive (MON),Incentive (USD),APR (%),"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
     ];
 
     // Group rows by platform protocol for subtotals
@@ -1562,6 +1564,11 @@ function HomeContent() {
           ? row.market.totalMON * monPriceNum
           : 0;
         const usdFormatted = incentiveUSD > 0 ? incentiveUSD.toFixed(2) : '';
+
+        // Format APR value
+        const aprFormatted = row.market.apr !== null && row.market.apr !== undefined
+          ? row.market.apr.toFixed(2)
+          : '';
 
         // Track totals for subtotal row (sum of individual pools)
         protocolTotalMON += row.market.totalMON;
@@ -1600,7 +1607,7 @@ function HomeContent() {
           : '';
 
         csvLines.push(
-          `${row.platform.platformProtocol},${row.funding.fundingProtocol},"${row.market.marketName}",${monFormatted},"${usdFormatted}","${tvlFormatted}","${tvlCostFormatted}","${tvlCostWoWFormatted}","${volumeFormatted}","${volumeCostFormatted}","${volumeCostWoWFormatted}"`
+          `${row.platform.platformProtocol},${row.funding.fundingProtocol},"${row.market.marketName}",${monFormatted},"${usdFormatted}","${aprFormatted}","${tvlFormatted}","${tvlCostFormatted}","${tvlCostWoWFormatted}","${volumeFormatted}","${volumeCostFormatted}","${volumeCostWoWFormatted}"`
         );
       }
 
@@ -1611,7 +1618,7 @@ function HomeContent() {
       const subtotalVolume = protocolTotalVolume > 0 ? protocolTotalVolume.toFixed(2) : '';
 
       csvLines.push(
-        `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}","${subtotalTVL}",,,\"${subtotalVolume}\",,`
+        `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}",,"${subtotalTVL}",,,\"${subtotalVolume}\",,`
       );
 
       // Add PROTOCOL TOTAL row - protocol-level data from DeFiLlama/Dune APIs
@@ -1626,7 +1633,7 @@ function HomeContent() {
       const protocolVolumeFormatted = protocolVolume !== null ? protocolVolume.toFixed(2) : '';
 
       csvLines.push(
-        `${protocol} PROTOCOL TOTAL,,,,,\"${protocolTVLFormatted}\",,,\"${protocolVolumeFormatted}\",,`
+        `${protocol} PROTOCOL TOTAL,,,,,,\"${protocolTVLFormatted}\",,,\"${protocolVolumeFormatted}\",,`
       );
     }
 
@@ -1638,6 +1645,67 @@ function HomeContent() {
     a.download = `mon-spent-${startDate}-to-${endDate}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
+  };
+
+  const exportEnhancedCSV = async () => {
+    if (results.length === 0) return;
+
+    setEnhancedCsvLoading(true);
+
+    try {
+      // Prepare pools data
+      const poolsData = processedTableRows.map(row => ({
+        platform: {
+          platformProtocol: row.platform.platformProtocol,
+        },
+        funding: {
+          fundingProtocol: row.funding.fundingProtocol,
+        },
+        market: {
+          marketName: row.market.marketName,
+          totalMON: row.market.totalMON,
+          tvl: row.market.tvl,
+          apr: row.market.apr,
+        },
+        volumeValue: row.volumeValue,
+        merklUrl: row.market.merklUrl,
+      }));
+
+      // Call the enhanced CSV API
+      const response = await fetch('/api/enhanced-csv', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          pools: poolsData,
+          startDate,
+          endDate,
+          monPrice: monPriceNum,
+          protocolTVL,
+          protocolDEXVolume,
+          efficiencyIssues: aiAnalysis?.efficiencyIssues || [],
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to generate enhanced CSV: ${response.statusText}`);
+      }
+
+      // Download the CSV
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `merkl-incentives-enhanced-${startDate}-${endDate}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error exporting enhanced CSV:', error);
+      setError(error instanceof Error ? error.message : 'Failed to export enhanced CSV');
+    } finally {
+      setEnhancedCsvLoading(false);
+    }
   };
 
   const totalMON = useMemo(() => results.reduce((sum, r) => sum + r.totalMON, 0), [results]);
@@ -1801,9 +1869,9 @@ function HomeContent() {
             aValue = a.incentiveUSD ?? 0;
             bValue = b.incentiveUSD ?? 0;
             break;
-          case 'period':
-            aValue = a.periodDays;
-            bValue = b.periodDays;
+          case 'apr':
+            aValue = a.market.apr ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
+            bValue = b.market.apr ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
             break;
           case 'tvl':
             aValue = a.market.tvl ?? 0;
@@ -2358,6 +2426,28 @@ function HomeContent() {
                   </svg>
                   Export CSV
                 </button>
+                <button
+                  onClick={exportEnhancedCSV}
+                  disabled={enhancedCsvLoading || !aiAnalysis || !aiAnalysis.efficiencyIssues || aiAnalysis.efficiencyIssues.length === 0}
+                  className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg font-semibold hover:from-purple-500 hover:to-pink-500 transition-all shadow-lg hover:shadow-purple-500/50 transform hover:scale-105 active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                >
+                  {enhancedCsvLoading ? (
+                    <>
+                      <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                      </svg>
+                      Export Enhanced CSV
+                    </>
+                  )}
+                </button>
               </div>
             </div>
 
@@ -2424,17 +2514,56 @@ function HomeContent() {
                   </div>
                 </summary>
 
-                {/* Key Findings */}
-                {aiAnalysis.keyFindings && aiAnalysis.keyFindings.length > 0 && (
+                {/* Key Findings & Recommendations */}
+                {((aiAnalysis.keyFindings && aiAnalysis.keyFindings.length > 0) || (aiAnalysis.recommendations && aiAnalysis.recommendations.length > 0)) && (
                   <div className="mb-6">
-                    <h4 className="text-lg font-semibold text-purple-300 mb-3">Key Findings</h4>
+                    <h4 className="text-lg font-semibold text-purple-300 mb-3">Key Findings & Recommendations</h4>
                     <ul className="space-y-2">
-                      {aiAnalysis.keyFindings.map((finding: string, idx: number) => (
-                        <li key={idx} className="text-gray-300 flex items-start gap-2">
-                          <span className="text-purple-400 mt-1">•</span>
-                          <span>{finding}</span>
-                        </li>
-                      ))}
+                      {(() => {
+                        const findings = aiAnalysis.keyFindings || [];
+                        const recommendations = aiAnalysis.recommendations || [];
+                        const maxLength = Math.max(findings.length, recommendations.length);
+                        
+                        return Array.from({ length: maxLength }, (_, idx) => {
+                          const finding = findings[idx];
+                          const recommendation = recommendations[idx];
+                          
+                          // If both exist, combine them
+                          if (finding && recommendation) {
+                            return (
+                              <li key={`paired-${idx}`} className="text-gray-300 flex items-start gap-2">
+                                <span className="text-purple-400 mt-1">•</span>
+                                <span>
+                                  {finding}
+                                  <span className="text-green-400 ml-2">→ Recommendation: {recommendation}</span>
+                                </span>
+                              </li>
+                            );
+                          }
+                          
+                          // If only finding exists
+                          if (finding) {
+                            return (
+                              <li key={`finding-${idx}`} className="text-gray-300 flex items-start gap-2">
+                                <span className="text-purple-400 mt-1">•</span>
+                                <span>{finding}</span>
+                              </li>
+                            );
+                          }
+                          
+                          // If only recommendation exists
+                          if (recommendation) {
+                            return (
+                              <li key={`rec-${idx}`} className="text-gray-300 flex items-start gap-2">
+                                <span className="text-green-400 mt-1">✓</span>
+                                <span>{recommendation}</span>
+                              </li>
+                            );
+                          }
+                          
+                          return null;
+                        });
+                      })()}
                     </ul>
                   </div>
                 )}
@@ -2512,21 +2641,6 @@ function HomeContent() {
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
-
-                {/* Recommendations */}
-                {aiAnalysis.recommendations && aiAnalysis.recommendations.length > 0 && (
-                  <div>
-                    <h4 className="text-lg font-semibold text-purple-300 mb-3">Recommendations</h4>
-                    <ul className="space-y-2">
-                      {aiAnalysis.recommendations.map((rec: string, idx: number) => (
-                        <li key={idx} className="text-gray-300 flex items-start gap-2">
-                          <span className="text-green-400 mt-1">✓</span>
-                          <span>{rec}</span>
-                        </li>
-                      ))}
-                    </ul>
                   </div>
                 )}
               </details>
@@ -2616,16 +2730,16 @@ function HomeContent() {
                     )}
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
                       <div className="group relative inline-block ml-auto cursor-help">
-                        <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('period'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
-                          Period (days)
-                          {sortConfig.key === 'period' && (
+                        <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('apr'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
+                          APR (%)
+                          {sortConfig.key === 'apr' && (
                             <span className="text-purple-400">
                               {sortConfig.direction === 'asc' ? '↑' : sortConfig.direction === 'desc' ? '↓' : ''}
                             </span>
                           )}
                         </button>
                         <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
-                          Number of days in the selected date range (inclusive of start and end dates)
+                          Annual Percentage Rate for the pool. Shows the expected annual return from providing liquidity.
                         </div>
                       </div>
                     </th>
@@ -2768,7 +2882,11 @@ function HomeContent() {
                                 })()}
                               </td>
                             )}
-                            <td className="py-3 px-4 text-sm text-right text-gray-400">{row.periodDays}</td>
+                            <td className="py-3 px-4 text-sm text-right text-gray-300">
+                              {row.market.apr !== null && row.market.apr !== undefined
+                                ? `${row.market.apr.toFixed(2)}%`
+                                : '-'}
+                            </td>
                             <td className="py-3 px-4 text-sm text-right text-gray-300">
                               {(() => {
                                 if (!row.market.tvl) return '-';

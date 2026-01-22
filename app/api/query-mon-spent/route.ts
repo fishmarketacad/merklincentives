@@ -75,6 +75,7 @@ async function fetchCampaigns(protocolId: string, endDate?: string): Promise<Cam
       }
 
       // Cache miss - fetch from API
+      // NOTE: mainProtocolId parameter is case-sensitive and must match Merkl's exact protocol IDs
       let url;
       if (protocolId === 'all') {
         url = `${MERKL_API_BASE}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100`;
@@ -345,6 +346,7 @@ export async function POST(request: NextRequest) {
 
     // Fetch campaigns for all protocols
     // Pass endDate to determine if this is historical data (for longer cache TTL)
+    // NOTE: mainProtocolId parameter is case-sensitive and must match Merkl's exact protocol IDs
     let allCampaigns: Campaign[] = [];
 
     if (protocols.length === 1 && protocols[0] === 'all') {
@@ -415,66 +417,38 @@ export async function POST(request: NextRequest) {
       }
 
       // Determine platform protocol (where the campaign runs) and get market name + APR + TVL + URL
-      // Use the protocol we queried, or determine from opportunity
+      // Always fetch opportunity to get protocol info (Merkl API no longer supports mainProtocolId filtering)
       let platformProtocolId = 'unknown';
       let marketName = 'Unknown Market';
       let marketAPR: number | undefined = undefined;
       let marketTVL: number | undefined = undefined;
       let merklUrl: string | undefined = undefined;
       let opportunityId: string | undefined = campaign.opportunityId;
-      let opportunityData: any = null; // Store opportunity data to avoid double-fetching
-      
-      if (protocols.length === 1 && protocols[0] !== 'all') {
-        // If we queried a specific protocol, that's the platform
-        platformProtocolId = protocols[0];
-        
-        // Still fetch opportunity for market name, APR, TVL, and URL (cached)
-        if (campaign.opportunityId) {
-          try {
-            opportunityData = await fetchOpportunity(String(campaign.opportunityId), isHistorical);
-            marketName = opportunityData?.name || `Market ${campaign.opportunityId}`;
-            marketAPR = opportunityData?.apr !== undefined ? parseFloat(String(opportunityData.apr)) : undefined;
-            // Get TVL from opportunity as initial value (will be overridden by campaign metrics if available)
-            if (opportunityData?.tvl !== undefined && opportunityData.tvl > 0) {
-              marketTVL = parseFloat(String(opportunityData.tvl));
-            }
-            // Generate Merkl search page URL with protocol search
-            // Using search page instead of direct opportunity links due to URL case sensitivity issues
-            if (opportunityData?.chain?.name && opportunityData?.protocol?.id) {
-              const chainName = opportunityData.chain.name.toLowerCase();
-              const protocolId = opportunityData.protocol.id;
-              merklUrl = `https://app.merkl.xyz/chains/${chainName}?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
-            }
-          } catch (e) {
-            marketName = `Market ${campaign.opportunityId}`;
+      let opportunityData: any = null;
+
+      if (campaign.opportunityId) {
+        try {
+          opportunityData = await fetchOpportunity(String(campaign.opportunityId), isHistorical);
+          platformProtocolId = opportunityData?.protocol?.id || fundingProtocolId;
+          marketName = opportunityData?.name || `Market ${campaign.opportunityId}`;
+          marketAPR = opportunityData?.apr !== undefined ? parseFloat(String(opportunityData.apr)) : undefined;
+          // Get TVL from opportunity as initial value (will be overridden by campaign metrics if available)
+          if (opportunityData?.tvl !== undefined && opportunityData.tvl > 0) {
+            marketTVL = parseFloat(String(opportunityData.tvl));
           }
+          // Generate Merkl search page URL with protocol search
+          // Using search page instead of direct opportunity links due to URL case sensitivity issues
+          if (opportunityData?.chain?.name && opportunityData?.protocol?.id) {
+            const chainName = opportunityData.chain.name.toLowerCase();
+            const protocolId = opportunityData.protocol.id;
+            merklUrl = `https://app.merkl.xyz/chains/${chainName}?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
+          }
+        } catch (e) {
+          platformProtocolId = fundingProtocolId;
+          marketName = `Market ${campaign.opportunityId}`;
         }
       } else {
-        // For "all" queries, determine from opportunity (cached)
-        if (campaign.opportunityId) {
-          try {
-            opportunityData = await fetchOpportunity(String(campaign.opportunityId), isHistorical);
-            platformProtocolId = opportunityData?.protocol?.id || fundingProtocolId;
-            marketName = opportunityData?.name || `Market ${campaign.opportunityId}`;
-            marketAPR = opportunityData?.apr !== undefined ? parseFloat(String(opportunityData.apr)) : undefined;
-            // Get TVL from opportunity as initial value (will be overridden by campaign metrics if available)
-            if (opportunityData?.tvl !== undefined && opportunityData.tvl > 0) {
-              marketTVL = parseFloat(String(opportunityData.tvl));
-            }
-            // Generate Merkl search page URL with protocol search
-            // Using search page instead of direct opportunity links due to URL case sensitivity issues
-            if (opportunityData?.chain?.name && opportunityData?.protocol?.id) {
-              const chainName = opportunityData.chain.name.toLowerCase();
-              const protocolId = opportunityData.protocol.id;
-              merklUrl = `https://app.merkl.xyz/chains/${chainName}?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
-            }
-          } catch (e) {
-            platformProtocolId = fundingProtocolId;
-            marketName = `Market ${campaign.opportunityId}`;
-          }
-        } else {
-          platformProtocolId = fundingProtocolId;
-        }
+        platformProtocolId = fundingProtocolId;
       }
 
       const rewardToken = campaignDetails?.rewardToken || campaign.rewardToken;

@@ -15,10 +15,11 @@ const commonProtocols = [
   'upshift',
   'townsquare',
   'uniswap',
-  'beefy',
+  'Beefy', // Capital B - Merkl API uses "Beefy" not "beefy"
   'accountable',
   'curve',
   'lfj', // LFJ DEX - shows TVL/Volume even without Merkl incentives
+  'wlfi', // WLFI - appears as funding protocol only
 ];
 
 // Date utilities

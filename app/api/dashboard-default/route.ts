@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getCache, isCacheValid, updateAIAnalysis } from '@/app/lib/dashboardCache';
 
+// Track logged messages to prevent duplicate logs
+const loggedCacheMisses = new Set<string>();
+const loggedCacheHits = new Set<string>();
+
 function getYesterdayUTC(): string {
   const yesterday = new Date();
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
@@ -14,7 +18,14 @@ export async function GET() {
 
     // Check if cache exists and is valid
     if (cache && await isCacheValid(yesterday)) {
-      console.log('[Dashboard Default] Serving cached data for', yesterday);
+      if (!loggedCacheHits.has(yesterday)) {
+        console.log('[Dashboard Default] Serving cached data for', yesterday);
+        loggedCacheHits.add(yesterday);
+        // Clear old dates from set to prevent memory leak
+        if (loggedCacheHits.size > 7) {
+          loggedCacheHits.clear();
+        }
+      }
       return NextResponse.json({
         success: true,
         cached: true,
@@ -23,7 +34,14 @@ export async function GET() {
     }
 
     // Cache miss or invalid - return empty state and trigger manual refresh
-    console.log('[Dashboard Default] Cache miss for', yesterday);
+    if (!loggedCacheMisses.has(yesterday)) {
+      console.log('[Dashboard Default] Cache miss for', yesterday);
+      loggedCacheMisses.add(yesterday);
+      // Clear old dates from set to prevent memory leak
+      if (loggedCacheMisses.size > 7) {
+        loggedCacheMisses.clear();
+      }
+    }
     return NextResponse.json({
       success: false,
       cached: false,

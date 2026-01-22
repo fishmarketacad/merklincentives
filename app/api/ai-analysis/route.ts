@@ -33,7 +33,7 @@ const ANALYSIS_CONFIG = {
   assetTypes: {
     stablecoin: { range: [5, 15], definition: 'Both tokens are stablecoins (USDC/USDT/DAI/AUSD)' },
     'stablecoin-derivative': { range: [8, 18], definition: 'Stablecoin + yield-bearing stablecoin (AUSD-earnAUSD, USDC-sUSDC)' },
-    'mon-related': { range: [20, 60], definition: 'Contains MON token (MON-USDC, MON-AUSD, MON-wBTC) - L1-native token pairs' },
+    'mon-related': { range: [0, 50], definition: 'Contains MON token (MON-USDC, MON-AUSD, MON-wBTC) - L1-native token pairs. Above 50% TVL Cost is inefficient (Uniswap MON-USDC benchmark ~50% APR). Below 50% is acceptable.' },
     'btc-related': { range: [10, 25], definition: 'Contains BTC (wBTC-USDC, wBTC-AUSD)' },
     'lst-related': { range: [8, 20], definition: 'Contains liquid staking tokens (stETH-ETH, rETH-USDC)' },
     commodity: { range: [10, 25], definition: 'Tokenized commodities (XAUt0-AUSD for gold)' },
@@ -390,7 +390,7 @@ Pools are grouped by asset risk profile. **Only compare pools within the same as
 |------------|------------|------------------------|
 | **Stablecoin** | Both tokens are stablecoins (USDC/USDT/DAI/AUSD) | 5-15% |
 | **Stablecoin-Derivative** | Stablecoin + yield-bearing stablecoin (AUSD-earnAUSD, USDC-sUSDC) | 8-18% |
-| **MON Pairs** | Contains MON token (MON-USDC, MON-AUSD, MON-wBTC) - L1-native token pairs | 20-60% |
+| **MON Pairs** | Contains MON token (MON-USDC, MON-AUSD, MON-wBTC) - L1-native token pairs | 0-50% (above 50% is inefficient; Uniswap MON-USDC benchmark ~50% APR) |
 | **BTC Pairs** | Contains BTC (wBTC-USDC, wBTC-AUSD) | 10-25% |
 | **LST Pairs** | Contains liquid staking tokens (stETH-ETH, rETH-USDC) | 8-20% |
 | **Commodity** | Tokenized commodities (XAUt0-AUSD for gold) | 10-25% |
@@ -922,7 +922,7 @@ async function addAnalysisGuidelines(mode: AnalysisMode, canPerformWowAnalysis: 
   if (isProtocolLevel) {
     section += `1. **Protocol-Level Efficiency Assessment**:\n`;
     section += `   - Is the average TVL Cost reasonable for the asset types they're incentivizing? (Compare against expected ranges in table above)\n`;
-    section += `   - Are there pools with extremely high TVL Cost (>50% for MON pairs, >30% for stablecoins) that need attention?\n`;
+    section += `   - Are there pools with extremely high TVL Cost (>50% for MON pairs, >30% for stablecoins) that need attention? Note: MON pairs above 50% TVL Cost are inefficient (Uniswap MON-USDC benchmark ~50% APR).\n`;
     section += `   - Is the protocol spending efficiently across all pools? (Check max vs min TVL Cost spread)\n`;
     section += `   - **Asset Type Distribution**: What asset types does this protocol focus on? (MON pairs, stablecoins, BTC, LST, etc.)\n`;
     section += `   - **Pool Efficiency Spread**: If max TVL Cost is much higher than average, identify which pools are inefficient\n\n`;
@@ -1194,11 +1194,11 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
     section += `      "poolId": "protocol-fundingProtocol-marketName",\n`;
     section += `      "assetType": "mon-related",\n`;
     section += `      "tvlCost": 75.88,\n`;
-    section += `      "expectedRange": [20, 60],\n`;
+    section += `      "expectedRange": [20, 50],\n`;
     section += `      "status": "above_range",\n`;
     section += `      "issue": "TVL Cost 26.5% above expected range maximum despite being L1-native token pair. TVL dropped 20% ($990K loss) from $4.95M to $3.96M while incentives remained stable (-0.4%), indicating poor TVL retention. Despite a high 73.39% APR, the pool failed to retain capital, suggesting structural issues or competitive pressure.",\n`;
     section += `      "severity": "high",\n`;
-    section += `      "recommendation": "Reduce incentives by 20-25% to align TVL Cost closer to 60% upper bound. Investigate TVL migration to competitor MON pairs. Current 73.39% APR appears insufficient to retain TVL, indicating either inefficient incentive allocation or external competitive pressure.",\n`;
+    section += `      "recommendation": "Reduce incentives by 20-25% to bring TVL Cost below 50% threshold. Compare with competitors: PancakeSwap WMON-USDC has 12.70% TVL Cost (vs current 75.88%), Uniswap MON-USDC ~50% APR benchmark. Current 73.39% APR vs competitor 60-85% APR range suggests over-incentivization. TVL migration likely to lower-cost competitors.",\n`;
     section += `      "analysisConfidence": "high"\n`;
     section += `    }\n`;
     section += `  ],\n`;
@@ -1281,7 +1281,20 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
   section += `- Prioritize recommendations by impact (critical issues first)\n`;
   section += `- Consider both efficiency (TVL Cost) and effectiveness (TVL growth)\n`;
   section += `- Provide actionable guidance, not just observations\n`;
-  section += `- Include confidence levels for each analysis (high/medium/low)\n`;
+  section += `- Include confidence levels for each analysis (high/medium/low)\n\n`;
+  
+  section += `**8. CRITICAL: Competitor Comparisons in Recommendations**\n`;
+  section += `- **ALWAYS compare pools with competitors** when generating recommendations in efficiencyIssues\n`;
+  section += `- **Compare similar token pairs**: WMON-USDC can be compared with WMON-AUSD, WMON-USDT, MON-USDC, etc.\n`;
+  section += `- **Compare same protocol types**: DEX pools (Uniswap, PancakeSwap) vs DEX pools; Lending (Townsquare, Morpho) vs Lending\n`;
+  section += `- **Required competitor data in recommendations**:\n`;
+  section += `  * Current pool APR vs competitor APR (e.g., "Current 73.39% APR vs PancakeSwap 60.96% APR")\n`;
+  section += `  * Current pool TVL Cost vs competitor TVL Cost (e.g., "TVL Cost 75.88% vs PancakeSwap 12.70%")\n`;
+  section += `  * Explain why pool is inefficient relative to competitors\n`;
+  section += `  * Reference specific competitor pools from "Example Opportunities" section\n`;
+  section += `- **When competitor data is available**: Include it in the recommendation\n`;
+  section += `- **When no direct competitors exist**: Note this and explain based on expected ranges\n`;
+  section += `- **Example format**: "Reduce incentives 20-25%. Compare: Current 75.88% TVL Cost vs PancakeSwap WMON-USDC 12.70% (same token pair, DEX vs DEX). Current 73.39% APR vs competitor range 60-85% APR suggests over-incentivization."\n`;
 
   return section;
 }

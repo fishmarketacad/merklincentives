@@ -9,14 +9,16 @@ import { Redis } from '@upstash/redis';
 // Initialize Redis client (reads from UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN)
 // Falls back to KV_REST_API_URL and KV_REST_API_TOKEN if Upstash env vars not found
 let redisClient: Redis | null = null;
+let redisInitialized = false; // Track if we've already tried to initialize
+let hasLoggedDisabled = false; // Track if we've already logged the disabled message
 
 /**
  * Get Redis client instance
  * Returns null if Upstash credentials are not available
  */
 function getRedisClient(): Redis | null {
-  // Check if client already initialized
-  if (redisClient) {
+  // Check if client already initialized (either successfully or determined to be unavailable)
+  if (redisInitialized) {
     return redisClient;
   }
 
@@ -27,7 +29,11 @@ function getRedisClient(): Redis | null {
   const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 
   if (!upstashUrl || !upstashToken) {
-    console.log('[Cache] Redis disabled - Upstash env vars not set. Caching skipped, app will work normally.');
+    if (!hasLoggedDisabled) {
+      console.log('[Cache] Redis disabled - Upstash env vars not set. Caching skipped, app will work normally.');
+      hasLoggedDisabled = true;
+    }
+    redisInitialized = true;
     return null;
   }
 
@@ -38,10 +44,12 @@ function getRedisClient(): Redis | null {
       url: upstashUrl,
       token: upstashToken,
     });
+    redisInitialized = true;
     console.log('[Cache] Upstash Redis client initialized');
     return redisClient;
   } catch (error: any) {
     console.error('[Cache] Failed to initialize Upstash Redis:', error.message || error);
+    redisInitialized = true;
     return null;
   }
 }

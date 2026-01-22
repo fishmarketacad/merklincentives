@@ -23,10 +23,11 @@ const PROTOCOL_SLUG_MAP: Record<string, string> = {
   'renzo': 'renzo',
   'upshift': 'upshift',
   'townsquare': 'townsquare',
-  'beefy': 'beefy',
+  'Beefy': 'beefy', // Merkl uses "Beefy" (capital B), DeFiLlama uses "beefy"
   'accountable': 'accountable',
   'curve': 'curve-dex', // DeFiLlama uses "curve-dex" slug
   'lfj': 'lfj', // LFJ DEX
+  'wlfi': 'wlfi', // WLFI - appears as funding protocol only
 };
 
 // Map protocols to Dune query IDs
