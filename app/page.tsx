@@ -1653,7 +1653,243 @@ function HomeContent() {
     setEnhancedCsvLoading(true);
 
     try {
-      // Prepare pools data
+      // For enhanced CSV, we need AI analysis for ALL protocols (not just selected ones)
+      // Fetch all protocols data and run comprehensive AI analysis
+      console.log('[Enhanced CSV] Fetching all protocols data for comprehensive AI analysis...');
+      
+      const commonProtocols = [
+        'clober',
+        'curvance',
+        'gearbox',
+        'kuru',
+        'morpho',
+        'euler',
+        'pancake-swap',
+        'monday-trade',
+        'renzo',
+        'upshift',
+        'townsquare',
+        'uniswap',
+        'Beefy',
+        'accountable',
+        'curve',
+        'lfj',
+        'wlfi',
+      ];
+
+      // Fetch all protocols data
+      const [allProtocolsResponse, allProtocolsTVLResponse] = await Promise.all([
+        fetch('/api/query-mon-spent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate,
+            endDate,
+            token: 'WMON',
+          }),
+        }),
+        fetch('/api/protocol-tvl', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate,
+            endDate,
+          }),
+        }),
+      ]);
+
+      if (!allProtocolsResponse.ok || !allProtocolsTVLResponse.ok) {
+        throw new Error('Failed to fetch all protocols data');
+      }
+
+      const allProtocolsData = await allProtocolsResponse.json();
+      const allProtocolsTVLData = await allProtocolsTVLResponse.json();
+
+      // Calculate previous week dates
+      const getPreviousWeekDates = (start: string, end: string) => {
+        const startDate = new Date(start + 'T00:00:00Z');
+        const endDate = new Date(end + 'T00:00:00Z');
+        const daysDiff = Math.floor((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+        const prevEnd = new Date(startDate);
+        prevEnd.setUTCDate(prevEnd.getUTCDate() - 1);
+        const prevStart = new Date(prevEnd);
+        prevStart.setUTCDate(prevStart.getUTCDate() - daysDiff + 1);
+        return {
+          prevStartDate: prevStart.toISOString().split('T')[0],
+          prevEndDate: prevEnd.toISOString().split('T')[0],
+        };
+      };
+
+      const { prevStartDate, prevEndDate } = getPreviousWeekDates(startDate, endDate);
+
+      // Fetch previous week data
+      const [prevAllProtocolsResponse, prevAllProtocolsTVLResponse] = await Promise.all([
+        fetch('/api/query-mon-spent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+            token: 'WMON',
+          }),
+        }),
+        fetch('/api/protocol-tvl', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: commonProtocols,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+          }),
+        }),
+      ]);
+
+      const prevAllProtocolsData = prevAllProtocolsResponse.ok ? await prevAllProtocolsResponse.json() : { results: [] };
+      const prevAllProtocolsTVLData = prevAllProtocolsTVLResponse.ok ? await prevAllProtocolsTVLResponse.json() : { tvlData: {}, dexVolumeData: {} };
+
+      // Prepare AI analysis data for ALL protocols
+      const prepareAIDataForAllProtocols = () => {
+        const extractTokenPair = (marketName: string): string => {
+          const match = marketName.match(/([A-Z0-9]+)[-\/]([A-Z0-9]+)/);
+          return match ? `${match[1]}-${match[2]}` : '';
+        };
+
+        const calculateTVLCost = (incentivesUSD: number, tvl: number, days: number): number | null => {
+          if (!tvl || tvl === 0 || !incentivesUSD) return null;
+          const annualizedIncentives = (incentivesUSD / days) * 365;
+          return (annualizedIncentives / tvl) * 100;
+        };
+
+        const periodDays = Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+        const prevPoolMap = new Map<string, any>();
+        
+        (prevAllProtocolsData.results || []).forEach((platform: any) => {
+          platform.fundingProtocols?.forEach((funding: any) => {
+            funding.markets?.forEach((market: any) => {
+              const key = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`;
+              prevPoolMap.set(key.toLowerCase(), {
+                protocol: platform.platformProtocol,
+                fundingProtocol: funding.fundingProtocol,
+                marketName: market.marketName,
+                incentivesMON: market.totalMON || 0,
+                incentivesUSD: (market.totalMON || 0) * monPriceNum,
+                tvl: market.tvl || null,
+              });
+            });
+          });
+        });
+
+        const currentPools = (allProtocolsData.results || []).flatMap((platform: any) =>
+          platform.fundingProtocols.flatMap((funding: any) =>
+            funding.markets.map((market: any) => {
+              const protocolKey = platform.platformProtocol.toLowerCase();
+              let tvl = market.tvl || null;
+              if (allProtocolsTVLData.tvlData?.[protocolKey]) {
+                tvl = allProtocolsTVLData.tvlData[protocolKey];
+              }
+              const tokenPair = extractTokenPair(market.marketName);
+              const dexVolume = allProtocolsTVLData.dexVolumeData?.[protocolKey];
+              const volume = dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
+              const incentivesUSD = (market.totalMON || 0) * monPriceNum;
+              const tvlCost = calculateTVLCost(incentivesUSD, tvl || 0, periodDays);
+              const marketKey = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`.toLowerCase();
+              const prevPool = prevPoolMap.get(marketKey);
+              let wowChange = null;
+              if (prevPool && tvlCost !== null) {
+                const prevTvl = prevPool.tvl || null;
+                const prevIncentivesUSD = prevPool.incentivesUSD || 0;
+                const prevTVLCost = calculateTVLCost(prevIncentivesUSD, prevTvl || 0, periodDays);
+                if (prevTVLCost !== null && prevTVLCost !== 0) {
+                  wowChange = ((tvlCost - prevTVLCost) / prevTVLCost) * 100;
+                }
+              }
+              return {
+                protocol: platform.platformProtocol,
+                fundingProtocol: funding.fundingProtocol,
+                marketName: market.marketName,
+                tokenPair,
+                incentivesMON: market.totalMON || 0,
+                incentivesUSD,
+                tvl,
+                volume,
+                apr: market.apr || null,
+                tvlCost,
+                wowChange,
+                periodDays,
+                merklUrl: market.merklUrl || null,
+              };
+            })
+          )
+        );
+
+        const previousPools = (prevAllProtocolsData.results || []).flatMap((platform: any) =>
+          platform.fundingProtocols.flatMap((funding: any) =>
+            funding.markets.map((market: any) => {
+              const protocolKey = platform.platformProtocol.toLowerCase();
+              let tvl = market.tvl || null;
+              if (prevAllProtocolsTVLData.tvlData?.[protocolKey]) {
+                tvl = prevAllProtocolsTVLData.tvlData[protocolKey];
+              }
+              const tokenPair = extractTokenPair(market.marketName);
+              const dexVolume = prevAllProtocolsTVLData.dexVolumeData?.[protocolKey];
+              const volume = dexVolume?.volumeInRange ?? dexVolume?.volume7d ?? dexVolume?.volume30d ?? null;
+              const incentivesUSD = (market.totalMON || 0) * monPriceNum;
+              const tvlCost = calculateTVLCost(incentivesUSD, tvl || 0, periodDays);
+              return {
+                protocol: platform.platformProtocol,
+                fundingProtocol: funding.fundingProtocol,
+                marketName: market.marketName,
+                tokenPair,
+                incentivesMON: market.totalMON || 0,
+                incentivesUSD,
+                tvl,
+                volume,
+                apr: market.apr || null,
+                tvlCost,
+                wowChange: null,
+                periodDays,
+              };
+            })
+          )
+        );
+
+        return { currentPools, previousPools };
+      };
+
+      const { currentPools, previousPools } = prepareAIDataForAllProtocols();
+      console.log('[Enhanced CSV] Prepared', currentPools.length, 'current pools and', previousPools.length, 'previous pools for AI analysis');
+
+      // Run AI analysis on ALL protocols
+      const aiAnalysisResponse = await fetch('/api/ai-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentWeek: {
+            pools: currentPools,
+            startDate,
+            endDate,
+            monPrice: monPriceNum,
+          },
+          previousWeek: {
+            pools: previousPools,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+          },
+          includeAllData: true,
+        }),
+      });
+
+      if (!aiAnalysisResponse.ok) {
+        throw new Error('Failed to generate AI analysis for all protocols');
+      }
+
+      const comprehensiveAIAnalysis = await aiAnalysisResponse.json();
+      console.log('[Enhanced CSV] AI analysis complete. efficiencyIssues count:', comprehensiveAIAnalysis.analysis?.efficiencyIssues?.length || 0);
+
+      // Prepare pools data from current selection (for CSV rows)
       const poolsData = processedTableRows.map(row => ({
         platform: {
           platformProtocol: row.platform.platformProtocol,
@@ -1671,7 +1907,7 @@ function HomeContent() {
         merklUrl: row.market.merklUrl,
       }));
 
-      // Call the enhanced CSV API
+      // Call the enhanced CSV API with comprehensive AI analysis
       const response = await fetch('/api/enhanced-csv', {
         method: 'POST',
         headers: {
@@ -1682,9 +1918,9 @@ function HomeContent() {
           startDate,
           endDate,
           monPrice: monPriceNum,
-          protocolTVL,
-          protocolDEXVolume,
-          efficiencyIssues: aiAnalysis?.efficiencyIssues || [],
+          protocolTVL: allProtocolsTVLData.tvlData || {},
+          protocolDEXVolume: allProtocolsTVLData.dexVolumeData || {},
+          efficiencyIssues: comprehensiveAIAnalysis.analysis?.efficiencyIssues || [],
         }),
       });
 
@@ -2760,6 +2996,21 @@ function HomeContent() {
                     </th>
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
                       <div className="group relative inline-block ml-auto cursor-help">
+                        <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('volume'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
+                          Volume ({startDate} - {endDate})
+                          {sortConfig.key === 'volume' && (
+                            <span className="text-purple-400">
+                              {sortConfig.direction === 'asc' ? '↑' : sortConfig.direction === 'desc' ? '↓' : ''}
+                            </span>
+                          )}
+                        </button>
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
+                          Trading volume for this specific pool during the date range. Fetched from Dune Analytics (Monad-specific). Shows "Not Found" if data unavailable.
+                        </div>
+                      </div>
+                    </th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
+                      <div className="group relative inline-block ml-auto cursor-help">
                         <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('tvlCost'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
                           TVL Cost (%)
                           {sortConfig.key === 'tvlCost' && (
@@ -2785,21 +3036,6 @@ function HomeContent() {
                         </button>
                         <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
                           Week-over-week percentage change in TVL Cost. Negative (green) is better (cost decreased). Red: &gt;10% increase, Green: &lt;-10% decrease
-                        </div>
-                      </div>
-                    </th>
-                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
-                      <div className="group relative inline-block ml-auto cursor-help">
-                        <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('volume'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
-                          Volume ({startDate} - {endDate})
-                          {sortConfig.key === 'volume' && (
-                            <span className="text-purple-400">
-                              {sortConfig.direction === 'asc' ? '↑' : sortConfig.direction === 'desc' ? '↓' : ''}
-                            </span>
-                          )}
-                        </button>
-                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
-                          Trading volume for this specific pool during the date range. Fetched from Dune Analytics (Monad-specific). Shows "Not Found" if data unavailable.
                         </div>
                       </div>
                     </th>
@@ -2903,6 +3139,25 @@ function HomeContent() {
                                 return value;
                               })()}
                             </td>
+                            <td className="py-3 px-4 text-sm text-right text-gray-300">
+                              {(() => {
+                                if (row.volumeError) {
+                                  return <span className="text-red-400 text-xs" title={row.volumeError}>Not Found</span>;
+                                }
+                                if (!row.volumeValue) return '-';
+                                const value = `$${(row.volumeValue / 1000000).toFixed(2)}M`;
+                                const change = row.volumeChange;
+                                if (change !== null) {
+                                  const changeColor = change > 10 ? 'text-green-400' : change < -10 ? 'text-red-400' : 'text-gray-400';
+                                  return (
+                                    <span>
+                                      {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
+                                    </span>
+                                  );
+                                }
+                                return value;
+                              })()}
+                            </td>
                             <td className={`py-3 px-4 text-sm text-right font-medium ${
                               row.tvlCost && row.tvlCost > 50 ? 'text-red-400' : row.tvlCost && row.tvlCost > 20 ? 'text-yellow-400' : 'text-green-400'
                             }`}>
@@ -2947,25 +3202,6 @@ function HomeContent() {
                                   );
                                 }
                                 return content;
-                              })()}
-                            </td>
-                            <td className="py-3 px-4 text-sm text-right text-gray-300">
-                              {(() => {
-                                if (row.volumeError) {
-                                  return <span className="text-red-400 text-xs" title={row.volumeError}>Not Found</span>;
-                                }
-                                if (!row.volumeValue) return '-';
-                                const value = `$${(row.volumeValue / 1000000).toFixed(2)}M`;
-                                const change = row.volumeChange;
-                                if (change !== null) {
-                                  const changeColor = change > 10 ? 'text-green-400' : change < -10 ? 'text-red-400' : 'text-gray-400';
-                                  return (
-                                    <span>
-                                      {value} <span className={`text-xs ${changeColor}`}>({change > 0 ? '+' : ''}{change.toFixed(1)}%)</span>
-                                    </span>
-                                  );
-                                }
-                                return value;
                               })()}
                             </td>
                             <td className={`py-3 px-4 text-sm text-right font-medium ${

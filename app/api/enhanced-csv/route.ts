@@ -178,6 +178,7 @@ function findEfficiencyIssue(
     const action = actionMatch ? actionMatch[1].trim() : recommendation;
     const notes = issue.issue || recommendation;
 
+    console.log(`[Enhanced CSV] Matched poolId: "${poolId}" -> "${issue.poolId}", action="${action.substring(0, 50)}..."`);
     return { action, notes };
   }
 
@@ -300,7 +301,8 @@ export async function POST(request: NextRequest) {
     // Debug logging
     console.log('[Enhanced CSV] Received efficiencyIssues count:', efficiencyIssues?.length || 0);
     if (efficiencyIssues && efficiencyIssues.length > 0) {
-      console.log('[Enhanced CSV] Sample poolIds from efficiencyIssues:', efficiencyIssues.slice(0, 3).map(ei => ei.poolId));
+      console.log('[Enhanced CSV] Sample poolIds from efficiencyIssues:', efficiencyIssues.slice(0, 5).map(ei => ei.poolId));
+      console.log('[Enhanced CSV] All efficiencyIssues poolIds:', efficiencyIssues.map(ei => ei.poolId));
     }
 
     // Parse dates to timestamps
@@ -453,10 +455,18 @@ export async function POST(request: NextRequest) {
         // Matching function handles normalization internally
         const poolAI = findEfficiencyIssue(rawPoolId, efficiencyIssues);
         
-        // Debug logging for first few pools
+        // Debug logging for first few pools per protocol
         if (protocolPools.indexOf(pool) < 3) {
           const normalized = normalizePoolIdForMatching(rawPoolId);
-          console.log(`[Enhanced CSV] Pool ${protocolPools.indexOf(pool) + 1}: rawPoolId="${rawPoolId}", normalized="${normalized}", matched=${!!poolAI}`);
+          console.log(`[Enhanced CSV] ${protocol} Pool ${protocolPools.indexOf(pool) + 1}: rawPoolId="${rawPoolId}", normalized="${normalized}", volumeValue=${pool.volumeValue || 'null'}, matched=${!!poolAI}`);
+          if (!poolAI && efficiencyIssues && efficiencyIssues.length > 0) {
+            // Show what we're trying to match against
+            const sampleEI = efficiencyIssues.slice(0, 3).map(ei => ({
+              original: ei.poolId,
+              normalized: normalizePoolIdForMatching(ei.poolId)
+            }));
+            console.log(`[Enhanced CSV] Sample efficiencyIssues to match against:`, sampleEI);
+          }
         }
         
         // Use empty strings if no efficiency issue found (don't call AI to avoid 4-minute delays)

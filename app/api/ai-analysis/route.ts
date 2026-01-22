@@ -1263,10 +1263,11 @@ async function addOutputFormat(mode: AnalysisMode): Promise<string> {
   
   section += `**6. Analysis Depth Requirements**:\n`;
   section += `- **keyFindings**: Provide 5-8 high-level findings that summarize the most important trends\n`;
-  section += `- **efficiencyIssues**: Identify 10-15 pools with the most significant efficiency issues\n`;
-  section += `  * Prioritize by severity: critical > high > medium > low\n`;
+  section += `- **efficiencyIssues**: Analyze ALL pools in the pool data section and generate recommendations for each one\n`;
+  section += `  * For pools with issues: Prioritize by severity (critical > high > medium > low)\n`;
+  section += `  * For pools within expected range: Still provide recommendations (e.g., "Maintain current incentives", "Monitor for changes", "No action needed")\n`;
   section += `  * Include pools above expected range AND pools significantly below (potential under-incentivization)\n`;
-  section += `  * Skip pools that are perfectly within range with no notable issues\n`;
+  section += `  * **CRITICAL**: Every pool in the pool data section MUST have an entry in efficiencyIssues with a recommendation\n`;
   section += `- **wowExplanations**: Analyze 15-20 pools with the most significant WoW changes\n`;
   section += `  * Prioritize: |change| > 50%, then |change| > 30%, then |change| > 15%\n`;
   section += `  * SKIP pools with -5% < change < +5% (neutral/boring changes)\n`;
