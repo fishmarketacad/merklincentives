@@ -4,9 +4,18 @@ import { NextRequest, NextResponse } from 'next/server';
 // This allows the function to run longer than the default 60s limit
 export const maxDuration = 300; // 5 minutes
 
-// API Configuration - supports both Grok (xAI) and Claude (Anthropic)
-// Set AI_PROVIDER environment variable to 'grok' or 'claude' (defaults to 'claude')
-const AI_PROVIDER = (process.env.AI_PROVIDER || 'grok').toLowerCase();
+// ============================================================================
+// AI PROVIDER CONFIGURATION - CHANGE THIS ONE LINE TO SWITCH BETWEEN PROVIDERS
+// ============================================================================
+// Options: 'grok' or 'claude'
+// To switch providers, simply change the value below:
+const AI_PROVIDER = (process.env.AI_PROVIDER || 'claude').toLowerCase();
+// 
+// Examples:
+//   const AI_PROVIDER = (process.env.AI_PROVIDER || 'grok').toLowerCase();   // Use Grok
+//   const AI_PROVIDER = (process.env.AI_PROVIDER || 'claude').toLowerCase(); // Use Claude
+//
+// ============================================================================
 
 const XAI_API_KEY = process.env.XAI_API_KEY || process.env.GROK_API_KEY;
 const XAI_API_BASE = 'https://api.x.ai/v1';
@@ -1629,11 +1638,12 @@ IMPORTANT:
 }
 
 /**
- * Unified AI API caller with retry logic - automatically selects provider based on AI_PROVIDER env var
- * Supports: 'grok' or 'claude' (defaults to 'claude')
+ * Unified AI API caller with retry logic - automatically selects provider based on AI_PROVIDER constant
+ * Supports: 'grok' or 'claude'
  */
 async function callAI(prompt: string, retries = 3): Promise<any> {
-  const provider = (process.env.AI_PROVIDER || 'grok').toLowerCase();
+  // Use the constant defined at the top of the file
+  const provider = AI_PROVIDER;
 
   console.log(`Using AI provider: ${provider}`);
 
@@ -1704,7 +1714,7 @@ export async function POST(request: NextRequest) {
       console.log(prompt.substring(0, 1000) + '...');
       console.log('=== End Prompt ===');
 
-      // Call AI (Grok or Claude based on AI_PROVIDER env var)
+      // Call AI (Grok or Claude based on AI_PROVIDER constant)
       let analysis;
       try {
         analysis = await callAI(prompt);
@@ -1743,7 +1753,7 @@ export async function POST(request: NextRequest) {
     console.log(prompt.substring(0, 1000) + '...');
     console.log('=== End Prompt ===');
 
-      // Call AI (Grok or Claude based on AI_PROVIDER env var)
+      // Call AI (Grok or Claude based on AI_PROVIDER constant)
       let analysis;
       try {
         analysis = await callAI(prompt);

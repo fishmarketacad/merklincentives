@@ -337,13 +337,37 @@ function HomeContent() {
   }, [searchParams]);
 
   // Auto-trigger AI analysis and poll for updates if it's missing but cache exists
+  // Track query parameters to detect changes
+  const queryParamsKey = useMemo(() => {
+    return `${startDate}-${endDate}-${protocols.join(',')}-${monPriceNum}`;
+  }, [startDate, endDate, protocols.join(','), monPriceNum]);
+
+  const [lastQueryParamsKey, setLastQueryParamsKey] = useState<string>('');
+
   useEffect(() => {
     // Only run if:
     // 1. Dashboard is initialized
-    // 2. AI analysis is null
-    // 3. We have results (cache was loaded)
-    if (!isInitialized || aiAnalysis !== null || results.length === 0) {
+    // 2. We have results
+    // 3. Query parameters have changed OR AI analysis is null
+    if (!isInitialized || results.length === 0) {
       return;
+    }
+
+    // Check if query parameters have changed
+    const queryParamsChanged = queryParamsKey !== lastQueryParamsKey;
+    
+    // If query params haven't changed and AI analysis exists, don't regenerate
+    if (!queryParamsChanged && aiAnalysis !== null) {
+      return;
+    }
+
+    // Update the last query params key
+    if (queryParamsChanged) {
+      setLastQueryParamsKey(queryParamsKey);
+      // Clear AI analysis when query params change
+      setAiAnalysis(null);
+      setAiLoading(true);
+      setAiError('');
     }
 
     let aiTriggered = false;
@@ -551,30 +575,45 @@ function HomeContent() {
           setAiAnalysis(aiData.analysis);
           setAiLoading(false);
 
-          // Update localStorage
+          // Update localStorage (only for current session)
           const localCache = loadDashboardCache();
           if (localCache) {
             localCache.aiAnalysis = aiData.analysis;
             saveDashboardCache(localCache);
           }
 
-          // Update server cache so other users can see AI analysis
-          try {
-            const cacheResponse = await fetch('/api/dashboard-default', {
-              method: 'PUT',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ aiAnalysis: aiData.analysis }),
-            });
+          // Only update server cache if this matches the default query (yesterday's date range)
+          // Don't overwrite default cache with custom query results
+          const yesterday = new Date();
+          yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+          const sevenDaysAgo = new Date(yesterday);
+          sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 6);
+          const defaultStartDate = sevenDaysAgo.toISOString().split('T')[0];
+          const defaultEndDate = yesterday.toISOString().split('T')[0];
 
-            if (cacheResponse.ok) {
-              console.log('[AI Auto-Trigger] ✅ AI analysis saved to server cache for all users');
-            } else {
-              console.warn('[AI Auto-Trigger] ⚠️ Failed to save AI analysis to server cache');
+          const isDefaultQuery = startDate === defaultStartDate && endDate === defaultEndDate;
+          
+          if (isDefaultQuery) {
+            // Update server cache so other users can see AI analysis (only for default query)
+            try {
+              const cacheResponse = await fetch('/api/dashboard-default', {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ aiAnalysis: aiData.analysis }),
+              });
+
+              if (cacheResponse.ok) {
+                console.log('[AI Auto-Trigger] ✅ AI analysis saved to server cache for all users');
+              } else {
+                console.warn('[AI Auto-Trigger] ⚠️ Failed to save AI analysis to server cache');
+              }
+            } catch (cacheError) {
+              console.warn('[AI Auto-Trigger] ⚠️ Error saving AI analysis to server cache:', cacheError);
             }
-          } catch (cacheError) {
-            console.warn('[AI Auto-Trigger] ⚠️ Error saving AI analysis to server cache:', cacheError);
+          } else {
+            console.log('[AI Auto-Trigger] Custom query detected - not saving to server cache (date range:', startDate, 'to', endDate, ')');
           }
         } else {
           throw new Error('AI analysis response missing analysis field');
@@ -587,19 +626,49 @@ function HomeContent() {
     };
 
     const checkForAIAnalysis = async () => {
+      // Don't check server cache if query parameters have changed - we need fresh analysis
+      if (queryParamsChanged) {
+        console.log('[AI Poll] Query parameters changed, skipping cache check - will generate fresh analysis');
+        return;
+      }
+
       try {
         const response = await fetch('/api/dashboard-default');
         const data = await response.json();
 
+        // Only use cached AI analysis if it matches current query parameters
         if (response.ok && data.success && data.cached && data.data?.aiAnalysis) {
-          console.log('[AI Poll] AI analysis now available, updating...');
-          setAiAnalysis(data.data.aiAnalysis);
-          setAiLoading(false);
-          // Also update localStorage
-          const localCache = loadDashboardCache();
-          if (localCache) {
-            localCache.aiAnalysis = data.data.aiAnalysis;
-            saveDashboardCache(localCache);
+          const cachedStartDate = data.data.startDate;
+          const cachedEndDate = data.data.endDate;
+          const cachedProtocols = data.data.protocols || [];
+          
+          // Normalize protocols for comparison (sort and compare arrays)
+          const normalizeProtocols = (protos: string[]) => [...protos].sort().join(',');
+          const cachedProtocolsKey = normalizeProtocols(cachedProtocols);
+          const currentProtocolsKey = normalizeProtocols(protocols);
+          
+          const datesMatch = cachedStartDate === startDate && cachedEndDate === endDate;
+          const protocolsMatch = cachedProtocolsKey === currentProtocolsKey;
+          
+          // Only use cache if both dates AND protocols match current query
+          if (datesMatch && protocolsMatch) {
+            console.log('[AI Poll] AI analysis now available from cache and matches current parameters, updating...');
+            setAiAnalysis(data.data.aiAnalysis);
+            setAiLoading(false);
+            // Also update localStorage
+            const localCache = loadDashboardCache();
+            if (localCache) {
+              localCache.aiAnalysis = data.data.aiAnalysis;
+              saveDashboardCache(localCache);
+            }
+          } else {
+            console.log('[AI Poll] Cached AI analysis parameters do not match current query:', {
+              datesMatch,
+              protocolsMatch,
+              cached: { startDate: cachedStartDate, endDate: cachedEndDate, protocols: cachedProtocolsKey },
+              current: { startDate, endDate, protocols: currentProtocolsKey }
+            });
+            // Don't use cached analysis - it's for different parameters
           }
         }
       } catch (error) {
@@ -607,7 +676,14 @@ function HomeContent() {
       }
     };
 
-    // First, check if AI analysis is already being generated by cron
+    // If query parameters changed, trigger AI analysis immediately
+    if (queryParamsChanged) {
+      console.log('[AI Auto-Trigger] Query parameters changed, triggering fresh AI analysis...');
+      triggerAIAnalysis();
+      return; // Don't check cache or poll if we're generating fresh analysis
+    }
+
+    // First, check if AI analysis is already being generated by cron (only if query params haven't changed)
     checkForAIAnalysis();
 
     // Wait 5 seconds to see if cron has already started AI analysis
@@ -632,7 +708,7 @@ function HomeContent() {
       clearInterval(interval);
       clearTimeout(timeout);
     };
-  }, [isInitialized, aiAnalysis, results.length, previousWeekResults, protocolTVL, protocolDEXVolume, previousWeekProtocolTVL, previousWeekProtocolDEXVolume, monPriceNum, periodDays, startDate, endDate]);
+  }, [isInitialized, queryParamsKey, lastQueryParamsKey, aiAnalysis, results.length, previousWeekResults, protocolTVL, protocolDEXVolume, previousWeekProtocolTVL, previousWeekProtocolDEXVolume, monPriceNum, periodDays, startDate, endDate]);
   
   // Update URL parameters when state changes (but not during initialization)
   useEffect(() => {
