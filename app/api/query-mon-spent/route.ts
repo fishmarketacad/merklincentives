@@ -290,6 +290,29 @@ function calculateTotalMONSpent(
   return { totalMON, totalUSD };
 }
 
+/**
+ * Calculate total USD spent for external (non-MON) tokens
+ */
+function calculateExternalIncentiveUSD(
+  dailyRewardsRecords: any[],
+  startTimestamp: number,
+  endTimestamp: number
+) {
+  let totalUSD = 0;
+
+  for (const record of dailyRewardsRecords) {
+    const timestamp = parseInt(record.timestamp);
+    if (timestamp >= startTimestamp && timestamp <= endTimestamp) {
+      const usdValue = parseFloat(record.total || 0);
+      if (usdValue > 0) {
+        totalUSD += usdValue;
+      }
+    }
+  }
+
+  return totalUSD;
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Check if request has body
@@ -359,14 +382,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Filter by token symbol
-    const tokenSymbols = token === 'MON' ? ['MON', 'WMON', 'cWMON'] : ['WMON', 'MON', 'cWMON'];
+    // MON token symbols - used to separate MON incentives from external incentives
+    const monTokenSymbols = ['MON', 'WMON', 'cWMON'];
+
+    // Filter campaigns that overlap with date range (include ALL token types)
     const relevantCampaigns = allCampaigns.filter(campaign => {
       const rewardToken = campaign.rewardToken;
       if (!rewardToken) return false;
-
-      const isTargetToken = tokenSymbols.includes(rewardToken.symbol);
-      if (!isTargetToken) return false;
 
       const startTime = campaign.startTimestamp ? parseInt(String(campaign.startTimestamp)) : 0;
       const endTime = campaign.endTimestamp ? parseInt(String(campaign.endTimestamp)) : Infinity;
@@ -380,23 +402,26 @@ export async function POST(request: NextRequest) {
     interface MarketData {
       marketName: string;
       totalMON: number;
+      externalIncentiveUSD: number; // USD value of non-MON incentives (e.g., AUSD)
       apr?: number; // APR in percentage (e.g., 8.08 means 8.08%)
       tvl?: number; // TVL in USD at the end of date range
       merklUrl?: string; // Link to Merkl opportunity/campaign page
     }
-    
+
     interface FundingProtocolData {
       fundingProtocol: string;
       markets: MarketData[];
       totalMON: number;
+      externalIncentiveUSD: number;
     }
-    
+
     interface PlatformData {
       platformProtocol: string;
       fundingProtocols: FundingProtocolData[];
       totalMON: number;
+      externalIncentiveUSD: number;
     }
-    
+
     const platformData: Record<string, PlatformData> = {};
 
     for (const campaign of relevantCampaigns) {
@@ -453,12 +478,31 @@ export async function POST(request: NextRequest) {
 
       const rewardToken = campaignDetails?.rewardToken || campaign.rewardToken;
       const metrics = await fetchCampaignMetrics(String(campaignId), isHistorical);
-      const { totalMON } = calculateTotalMONSpent(
-        metrics.dailyRewardsRecords || [],
-        rewardToken,
-        startTimestamp,
-        endTimestamp
-      );
+
+      // Determine if this is a MON token or external token
+      const tokenSymbol = rewardToken?.symbol || '';
+      const isMonToken = monTokenSymbols.includes(tokenSymbol);
+
+      let totalMON = 0;
+      let externalUSD = 0;
+
+      if (isMonToken) {
+        // Calculate MON spent for MON-based tokens
+        const result = calculateTotalMONSpent(
+          metrics.dailyRewardsRecords || [],
+          rewardToken,
+          startTimestamp,
+          endTimestamp
+        );
+        totalMON = result.totalMON;
+      } else {
+        // Calculate USD value for external tokens (non-MON incentives like AUSD)
+        externalUSD = calculateExternalIncentiveUSD(
+          metrics.dailyRewardsRecords || [],
+          startTimestamp,
+          endTimestamp
+        );
+      }
 
       // Try to get APR and TVL at the end of the date range from campaign metrics
       // This is more accurate than current opportunity data for historical queries
@@ -466,7 +510,7 @@ export async function POST(request: NextRequest) {
       if (aprAtEndDate !== undefined) {
         marketAPR = aprAtEndDate;
       }
-      
+
       const tvlAtEndDate = getTVLAtDate(metrics.tvlRecords || [], endTimestamp);
       if (tvlAtEndDate !== undefined && tvlAtEndDate > 0) {
         // Use TVL from campaign metrics (more accurate for historical queries)
@@ -477,7 +521,8 @@ export async function POST(request: NextRequest) {
         marketTVL = parseFloat(String(opportunityData.tvl));
       }
 
-      if (totalMON <= 0) continue;
+      // Skip if no incentives at all
+      if (totalMON <= 0 && externalUSD <= 0) continue;
 
       // Initialize platform data structure
       if (!platformData[platformProtocolId]) {
@@ -485,6 +530,7 @@ export async function POST(request: NextRequest) {
           platformProtocol: platformProtocolId,
           fundingProtocols: [],
           totalMON: 0,
+          externalIncentiveUSD: 0,
         };
       }
 
@@ -498,6 +544,7 @@ export async function POST(request: NextRequest) {
           fundingProtocol: fundingProtocolId,
           markets: [],
           totalMON: 0,
+          externalIncentiveUSD: 0,
         };
         platformData[platformProtocolId].fundingProtocols.push(fundingProtocolData);
       }
@@ -508,6 +555,7 @@ export async function POST(request: NextRequest) {
         marketData = {
           marketName,
           totalMON: 0,
+          externalIncentiveUSD: 0,
           apr: marketAPR,
           tvl: marketTVL,
           merklUrl: merklUrl,
@@ -531,10 +579,13 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Add to totals
+      // Add to totals - track MON and external incentives separately
       marketData.totalMON += totalMON;
+      marketData.externalIncentiveUSD += externalUSD;
       fundingProtocolData.totalMON += totalMON;
+      fundingProtocolData.externalIncentiveUSD += externalUSD;
       platformData[platformProtocolId].totalMON += totalMON;
+      platformData[platformProtocolId].externalIncentiveUSD += externalUSD;
 
       await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -544,14 +595,17 @@ export async function POST(request: NextRequest) {
       .map(platform => ({
         platformProtocol: platform.platformProtocol,
         totalMON: parseFloat(platform.totalMON.toFixed(2)),
+        externalIncentiveUSD: parseFloat(platform.externalIncentiveUSD.toFixed(2)),
         fundingProtocols: platform.fundingProtocols
           .map(fp => ({
             fundingProtocol: fp.fundingProtocol,
             totalMON: parseFloat(fp.totalMON.toFixed(2)),
+            externalIncentiveUSD: parseFloat(fp.externalIncentiveUSD.toFixed(2)),
             markets: fp.markets
               .map(m => ({
                 marketName: m.marketName,
                 totalMON: parseFloat(m.totalMON.toFixed(2)),
+                externalIncentiveUSD: parseFloat(m.externalIncentiveUSD.toFixed(2)),
                 apr: m.apr !== undefined ? parseFloat(m.apr.toFixed(2)) : undefined,
                 tvl: m.tvl !== undefined ? parseFloat(m.tvl.toFixed(2)) : undefined,
                 merklUrl: m.merklUrl,

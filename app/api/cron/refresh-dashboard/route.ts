@@ -463,6 +463,105 @@ export async function GET(request: NextRequest) {
 
     console.log('[Cron] Previous week data fetched, results:', prevMonSpentData.results?.length || 0);
 
+    // Fetch per-market volumes from Dune (using PUT endpoint)
+    // This is the same logic as the manual query in page.tsx
+    console.log('[Cron] Fetching per-market volumes from Dune...');
+
+    // Helper function to extract markets from results
+    const extractMarkets = (results: any[]): Array<{ protocol: string; marketName: string; tokenPair?: string }> => {
+      const markets: Array<{ protocol: string; marketName: string; tokenPair?: string }> = [];
+      for (const platform of results || []) {
+        for (const funding of platform.fundingProtocols || []) {
+          for (const market of funding.markets || []) {
+            // Extract token pair from market name
+            const tokenPairMatch = market.marketName.match(/([A-Z0-9a-z]+)-([A-Z0-9a-z]+)/gi);
+            let tokenPair: string | undefined;
+            if (tokenPairMatch && tokenPairMatch.length > 0) {
+              // Get the longest match to ensure we get the full token pair
+              let longestMatch = tokenPairMatch[0];
+              for (const m of tokenPairMatch) {
+                if (m.length > longestMatch.length) {
+                  longestMatch = m;
+                }
+              }
+              tokenPair = longestMatch;
+            }
+            markets.push({
+              protocol: platform.platformProtocol,
+              marketName: market.marketName,
+              tokenPair,
+            });
+          }
+        }
+      }
+      return markets;
+    };
+
+    // Extract markets from current and previous week results
+    const currentMarkets = extractMarkets(monSpentData.results || []);
+    const prevMarkets = extractMarkets(prevMonSpentData.results || []);
+
+    console.log('[Cron] Extracted markets:', { current: currentMarkets.length, previous: prevMarkets.length });
+
+    // Fetch per-market volumes for current week
+    let marketVolumes: Record<string, any> = {};
+    let previousWeekMarketVolumes: Record<string, any> = {};
+
+    if (currentMarkets.length > 0) {
+      try {
+        const marketVolumeUrl = addBypassToUrl(`${baseUrl}/api/protocol-tvl`);
+        const marketVolumeResponse = await fetchWithTimeout(marketVolumeUrl, {
+          method: 'PUT',
+          headers: internalHeaders,
+          body: JSON.stringify({
+            markets: currentMarkets,
+            startDate: sevenDaysAgo,
+            endDate: yesterday,
+          }),
+        }, 90000);
+
+        if (marketVolumeResponse.ok) {
+          const marketVolumeData = await marketVolumeResponse.json();
+          if (marketVolumeData.success && marketVolumeData.marketVolumes) {
+            marketVolumes = marketVolumeData.marketVolumes;
+            console.log('[Cron] Current week per-market volumes fetched:', Object.keys(marketVolumes).length);
+          }
+        } else {
+          console.warn('[Cron] Failed to fetch current week per-market volumes:', marketVolumeResponse.status);
+        }
+      } catch (err: any) {
+        console.warn('[Cron] Error fetching current week per-market volumes:', err.message);
+      }
+    }
+
+    // Fetch per-market volumes for previous week
+    if (prevMarkets.length > 0) {
+      try {
+        const prevMarketVolumeUrl = addBypassToUrl(`${baseUrl}/api/protocol-tvl`);
+        const prevMarketVolumeResponse = await fetchWithTimeout(prevMarketVolumeUrl, {
+          method: 'PUT',
+          headers: internalHeaders,
+          body: JSON.stringify({
+            markets: prevMarkets,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+          }),
+        }, 90000);
+
+        if (prevMarketVolumeResponse.ok) {
+          const prevMarketVolumeData = await prevMarketVolumeResponse.json();
+          if (prevMarketVolumeData.success && prevMarketVolumeData.marketVolumes) {
+            previousWeekMarketVolumes = prevMarketVolumeData.marketVolumes;
+            console.log('[Cron] Previous week per-market volumes fetched:', Object.keys(previousWeekMarketVolumes).length);
+          }
+        } else {
+          console.warn('[Cron] Failed to fetch previous week per-market volumes:', prevMarketVolumeResponse.status);
+        }
+      } catch (err: any) {
+        console.warn('[Cron] Error fetching previous week per-market volumes:', err.message);
+      }
+    }
+
     // Store in cache IMMEDIATELY (without AI analysis to avoid timeout)
     await setCache({
       startDate: sevenDaysAgo,
@@ -474,10 +573,10 @@ export async function GET(request: NextRequest) {
       protocolTVL: tvlData.tvlData || {},
       protocolTVLMetadata: tvlData.tvlMetadata || {},
       protocolDEXVolume: tvlData.dexVolumeData || {},
-      marketVolumes: {},
+      marketVolumes,
       previousWeekProtocolTVL: prevTvlData.tvlData || {},
       previousWeekProtocolDEXVolume: prevTvlData.dexVolumeData || {},
-      previousWeekMarketVolumes: {},
+      previousWeekMarketVolumes,
       aiAnalysis: null, // Will be updated asynchronously
       timestamp: Date.now(),
       cacheDate: yesterday, // Use yesterday as the cache key

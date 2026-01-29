@@ -6,6 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 interface MarketResult {
   marketName: string;
   totalMON: number;
+  externalIncentiveUSD?: number; // USD value of non-MON incentives (e.g., AUSD)
   apr?: number; // APR in percentage
   tvl?: number; // TVL in USD at the end of date range
   merklUrl?: string; // Link to Merkl opportunity/campaign page
@@ -14,12 +15,14 @@ interface MarketResult {
 interface FundingProtocolResult {
   fundingProtocol: string;
   totalMON: number;
+  externalIncentiveUSD?: number; // USD value of non-MON incentives
   markets: MarketResult[];
 }
 
 interface QueryResult {
   platformProtocol: string;
   totalMON: number;
+  externalIncentiveUSD?: number; // USD value of non-MON incentives
   fundingProtocols: FundingProtocolResult[];
 }
 
@@ -2126,6 +2129,9 @@ function HomeContent() {
           const tvlChange = (prevMarket?.tvl !== undefined && market.tvl !== undefined) ? calculateWoWChange(market.tvl ?? null, prevMarket.tvl ?? null) : null;
           const volumeChange = prevVolumeValue ? calculateWoWChange(volumeValue, prevVolumeValue) : null;
           
+          // Get external incentive (non-MON) for this market
+          const externalIncentiveUSD = market.externalIncentiveUSD || 0;
+
           return {
             platform,
             funding,
@@ -2140,6 +2146,7 @@ function HomeContent() {
             volumeError,
             prevMarket,
             incentiveUSD,
+            externalIncentiveUSD,
             tvlCost,
             prevIncentiveUSD,
             prevTVLCost,
@@ -2184,6 +2191,10 @@ function HomeContent() {
           case 'incentiveUSD':
             aValue = a.incentiveUSD ?? 0;
             bValue = b.incentiveUSD ?? 0;
+            break;
+          case 'externalIncentive':
+            aValue = a.externalIncentiveUSD ?? 0;
+            bValue = b.externalIncentiveUSD ?? 0;
             break;
           case 'apr':
             aValue = a.market.apr ?? (sortConfig.direction === 'asc' ? Infinity : -Infinity);
@@ -2362,37 +2373,7 @@ function HomeContent() {
       // Get all common protocols
       const allProtocols = commonProtocols;
 
-      // Fetch current week data for all protocols
-      const currentWeekResponse = await fetch('/api/query-mon-spent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocols: allProtocols,
-          startDate,
-          endDate,
-          token: 'MON',
-        }),
-      });
-
-      if (!currentWeekResponse.ok) {
-        throw new Error('Failed to fetch current week data');
-      }
-
-      const currentWeekData = await currentWeekResponse.json();
-
-      // Fetch protocol TVL for all protocols
-      const tvlResponse = await fetch('/api/protocol-tvl', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocols: allProtocols,
-          endDate,
-        }),
-      });
-
-      const tvlData = tvlResponse.ok ? await tvlResponse.json() : {};
-
-      // Calculate previous week dates
+      // Calculate previous week dates first (no API call needed)
       const getPrevDates = (start: string, end: string) => {
         const startDate = new Date(start + 'T00:00:00Z');
         const endDate = new Date(end + 'T00:00:00Z');
@@ -2412,34 +2393,153 @@ function HomeContent() {
 
       const { prevStartDate, prevEndDate } = getPrevDates(startDate, endDate);
 
-      // Fetch previous week data
-      const previousWeekResponse = await fetch('/api/query-mon-spent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocols: allProtocols,
-          startDate: prevStartDate,
-          endDate: prevEndDate,
-          token: 'MON',
+      // Fetch all data in parallel for speed
+      console.log('[Download JSON] Fetching all data in parallel...');
+      const [currentWeekResponse, tvlResponse, previousWeekResponse, prevTvlResponse] = await Promise.all([
+        // Current week MON spent
+        fetch('/api/query-mon-spent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: allProtocols,
+            startDate,
+            endDate,
+            token: 'MON',
+          }),
         }),
-      });
-
-      const previousWeekData = previousWeekResponse.ok ? await previousWeekResponse.json() : { results: [] };
-
-      // Fetch previous week TVL
-      const prevTvlResponse = await fetch('/api/protocol-tvl', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocols: allProtocols,
-          endDate: prevEndDate,
+        // Current week TVL
+        fetch('/api/protocol-tvl', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: allProtocols,
+            endDate,
+          }),
         }),
-      });
+        // Previous week MON spent
+        fetch('/api/query-mon-spent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: allProtocols,
+            startDate: prevStartDate,
+            endDate: prevEndDate,
+            token: 'MON',
+          }),
+        }),
+        // Previous week TVL
+        fetch('/api/protocol-tvl', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            protocols: allProtocols,
+            endDate: prevEndDate,
+          }),
+        }),
+      ]);
 
-      const prevTvlData = prevTvlResponse.ok ? await prevTvlResponse.json() : {};
+      if (!currentWeekResponse.ok) {
+        throw new Error('Failed to fetch current week data');
+      }
+
+      const [currentWeekData, tvlData, previousWeekData, prevTvlData] = await Promise.all([
+        currentWeekResponse.json(),
+        tvlResponse.ok ? tvlResponse.json() : { tvlData: {}, dexVolumeData: {}, protocolTVL: {}, protocolDEXVolume: {} },
+        previousWeekResponse.ok ? previousWeekResponse.json() : { results: [] },
+        prevTvlResponse.ok ? prevTvlResponse.json() : { tvlData: {}, dexVolumeData: {}, protocolTVL: {}, protocolDEXVolume: {} },
+      ]);
 
       const monPriceNum = parseFloat(monPrice);
       const periodDays = Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+      // Helper function to extract markets for volume fetching
+      const extractMarketsForVolume = (results: any[]): Array<{ protocol: string; marketName: string; tokenPair?: string }> => {
+        const markets: Array<{ protocol: string; marketName: string; tokenPair?: string }> = [];
+        for (const platform of results || []) {
+          for (const funding of platform.fundingProtocols || []) {
+            for (const market of funding.markets || []) {
+              const tokenPairMatch = market.marketName.match(/([A-Z0-9a-z]+)-([A-Z0-9a-z]+)/gi);
+              let tokenPair: string | undefined;
+              if (tokenPairMatch && tokenPairMatch.length > 0) {
+                let longestMatch = tokenPairMatch[0];
+                for (const m of tokenPairMatch) {
+                  if (m.length > longestMatch.length) {
+                    longestMatch = m;
+                  }
+                }
+                tokenPair = longestMatch;
+              }
+              markets.push({
+                protocol: platform.platformProtocol,
+                marketName: market.marketName,
+                tokenPair,
+              });
+            }
+          }
+        }
+        return markets;
+      };
+
+      // Fetch per-market volumes from Dune (both weeks in parallel)
+      console.log('[Download JSON] Fetching per-market volumes in parallel...');
+      let currentMarketVolumes: Record<string, any> = {};
+      let prevMarketVolumes: Record<string, any> = {};
+
+      const currentMarketsForVolume = extractMarketsForVolume(currentWeekData.results || []);
+      const prevMarketsForVolume = extractMarketsForVolume(previousWeekData.results || []);
+
+      // Fetch both weeks in parallel
+      const volumePromises: Promise<void>[] = [];
+
+      if (currentMarketsForVolume.length > 0) {
+        volumePromises.push(
+          fetch('/api/protocol-tvl', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              markets: currentMarketsForVolume,
+              startDate,
+              endDate,
+            }),
+          })
+            .then(async (res) => {
+              if (res.ok) {
+                const data = await res.json();
+                if (data.success && data.marketVolumes) {
+                  currentMarketVolumes = data.marketVolumes;
+                  console.log('[Download JSON] Current week volumes fetched:', Object.keys(currentMarketVolumes).length);
+                }
+              }
+            })
+            .catch((err) => console.warn('[Download JSON] Failed to fetch current week volumes:', err))
+        );
+      }
+
+      if (prevMarketsForVolume.length > 0) {
+        volumePromises.push(
+          fetch('/api/protocol-tvl', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              markets: prevMarketsForVolume,
+              startDate: prevStartDate,
+              endDate: prevEndDate,
+            }),
+          })
+            .then(async (res) => {
+              if (res.ok) {
+                const data = await res.json();
+                if (data.success && data.marketVolumes) {
+                  prevMarketVolumes = data.marketVolumes;
+                  console.log('[Download JSON] Previous week volumes fetched:', Object.keys(prevMarketVolumes).length);
+                }
+              }
+            })
+            .catch((err) => console.warn('[Download JSON] Failed to fetch previous week volumes:', err))
+        );
+      }
+
+      await Promise.all(volumePromises);
 
       // Helper function
       const calculateTVLCostHelper = (incentivesUSD: number, tvl: number, days: number): number | null => {
@@ -2457,14 +2557,20 @@ function HomeContent() {
               ? calculateTVLCostHelper(incentivesUSD, market.tvl, periodDays)
               : null;
 
+            // Get volume from per-market volumes
+            const marketKey = `${platform.platformProtocol}-${market.marketName}`;
+            const marketVolume = currentMarketVolumes[marketKey];
+            const volume = marketVolume?.volumeInRange ?? marketVolume?.volume7d ?? marketVolume?.volume30d ?? null;
+
             return {
               protocol: platform.platformProtocol,
               fundingProtocol: funding.fundingProtocol,
               marketName: market.marketName,
               incentivesMON: market.totalMON,
+              externalIncentiveUSD: market.externalIncentiveUSD || 0,
               incentivesUSD,
               tvl: market.tvl || null,
-              volume: null, // Volume data not included in simple structure
+              volume,
               apr: market.apr || null,
               tvlCost,
               wowChange: null, // Will be calculated if needed
@@ -2484,14 +2590,20 @@ function HomeContent() {
               ? calculateTVLCostHelper(incentivesUSD, market.tvl, periodDays)
               : null;
 
+            // Get volume from per-market volumes
+            const marketKey = `${platform.platformProtocol}-${market.marketName}`;
+            const marketVolume = prevMarketVolumes[marketKey];
+            const volume = marketVolume?.volumeInRange ?? marketVolume?.volume7d ?? marketVolume?.volume30d ?? null;
+
             return {
               protocol: platform.platformProtocol,
               fundingProtocol: funding.fundingProtocol,
               marketName: market.marketName,
               incentivesMON: market.totalMON,
+              externalIncentiveUSD: market.externalIncentiveUSD || 0,
               incentivesUSD,
               tvl: market.tvl || null,
-              volume: null,
+              volume,
               apr: market.apr || null,
               tvlCost,
               wowChange: null,
@@ -2501,10 +2613,46 @@ function HomeContent() {
         )
       );
 
+      // Add protocols that don't have Merkl campaigns but we want their TVL/volume data
+      // These protocols are tracked for ecosystem overview even without MON incentives
+      const protocolsWithoutMerklCampaigns = ['lfj'];
+      const protocolsInCurrentPools = new Set(currentPools.map((p: any) => p.protocol.toLowerCase()));
+
+      for (const protocol of protocolsWithoutMerklCampaigns) {
+        if (!protocolsInCurrentPools.has(protocol)) {
+          // Get TVL from tvlData
+          const protocolTVL = tvlData.tvlData?.[protocol] || tvlData.protocolTVL?.[protocol] || null;
+          // Get volume from tvlData.dexVolumeData
+          const protocolVolume = tvlData.dexVolumeData?.[protocol] || null;
+          const volumeValue = protocolVolume?.volumeInRange ?? protocolVolume?.volume7d ?? protocolVolume?.volume30d ?? null;
+
+          if (protocolTVL || volumeValue) {
+            currentPools.push({
+              protocol: protocol,
+              fundingProtocol: 'none',
+              marketName: `${protocol.toUpperCase()} Protocol (No Merkl Campaigns)`,
+              incentivesMON: 0,
+              externalIncentiveUSD: 0,
+              incentivesUSD: 0,
+              tvl: protocolTVL,
+              volume: volumeValue,
+              apr: null,
+              tvlCost: null,
+              wowChange: null,
+              periodDays,
+              merklUrl: null,
+            });
+            console.log(`[Download JSON] Added ${protocol} without Merkl campaigns: TVL=${protocolTVL}, Volume=${volumeValue}`);
+          }
+        }
+      }
+
       // Calculate global context
       const totalMON = currentPools.reduce((sum: number, pool: any) => sum + pool.incentivesMON, 0);
       const totalUSD = currentPools.reduce((sum: number, pool: any) => sum + (pool.incentivesUSD || 0), 0);
+      const totalExternalIncentiveUSD = currentPools.reduce((sum: number, pool: any) => sum + (pool.externalIncentiveUSD || 0), 0);
       const totalTVL = currentPools.reduce((sum: number, pool: any) => sum + (pool.tvl || 0), 0);
+      const totalVolume = currentPools.reduce((sum: number, pool: any) => sum + (pool.volume || 0), 0);
       const avgTVLCost = currentPools.filter((p: any) => p.tvlCost !== null).reduce((sum: number, pool: any, _: number, arr: any[]) => sum + (pool.tvlCost || 0) / arr.length, 0);
 
       // Build complete JSON structure
@@ -2523,21 +2671,25 @@ function HomeContent() {
         globalContext: {
           totalMONDistributed: totalMON,
           totalUSDDistributed: totalUSD,
+          totalExternalIncentiveUSD: totalExternalIncentiveUSD,
           totalTVL: totalTVL,
+          totalVolume: totalVolume,
           averageTVLCost: avgTVLCost,
         },
         currentWeek: {
           pools: currentPools,
-          protocolTVL: tvlData.protocolTVL || {},
-          protocolDEXVolume: tvlData.protocolDEXVolume || {},
+          marketVolumes: currentMarketVolumes,
+          protocolTVL: tvlData.tvlData || {},
+          protocolDEXVolume: tvlData.dexVolumeData || {},
           startDate,
           endDate,
           monPrice: monPriceNum,
         },
         previousWeek: {
           pools: previousPools,
-          protocolTVL: prevTvlData.protocolTVL || {},
-          protocolDEXVolume: prevTvlData.protocolDEXVolume || {},
+          marketVolumes: prevMarketVolumes,
+          protocolTVL: prevTvlData.tvlData || {},
+          protocolDEXVolume: prevTvlData.dexVolumeData || {},
           startDate: prevStartDate,
           endDate: prevEndDate,
         },
@@ -3321,6 +3473,21 @@ ${JSON.stringify(fullInputData, null, 2)}
                         </div>
                       </div>
                     </th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
+                      <div className="group relative inline-block ml-auto cursor-help">
+                        <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('externalIncentive'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
+                          External Incentives
+                          {sortConfig.key === 'externalIncentive' && (
+                            <span className="text-purple-400">
+                              {sortConfig.direction === 'asc' ? '↑' : sortConfig.direction === 'desc' ? '↓' : ''}
+                            </span>
+                          )}
+                        </button>
+                        <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
+                          USD value of non-MON incentives (e.g., AUSD, other tokens). These are additional rewards from external sources distributed via Merkl campaigns.
+                        </div>
+                      </div>
+                    </th>
                     {monPrice && parseFloat(monPrice) > 0 && (
                       <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
                         <div className="group relative inline-block ml-auto cursor-help">
@@ -3473,6 +3640,11 @@ ${JSON.stringify(fullInputData, null, 2)}
                                 }
                                 return value;
                               })()}
+                            </td>
+                            <td className="py-3 px-4 text-sm text-right text-cyan-300">
+                              {row.externalIncentiveUSD > 0
+                                ? `$${row.externalIncentiveUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : '-'}
                             </td>
                             {monPrice && parseFloat(monPrice) > 0 && (
                               <td className="py-3 px-4 text-sm text-right text-gray-300">

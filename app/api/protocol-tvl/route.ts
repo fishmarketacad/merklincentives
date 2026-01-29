@@ -668,17 +668,18 @@ async function fetchProtocolTVL(protocolSlug: string, endTimestamp: number): Pro
     }
     
     const data = await response.json();
-    
+
     let resultTVL: number | null = null;
+    let borrowedAmount: number | null = null;
     let isHistorical = false;
-    
+
     // Try to get historical TVL for Monad chain at end date
     if (data.chainTvls && typeof data.chainTvls === 'object') {
       // Try different case variations for Monad chain
-      const monadChainData = data.chainTvls['Monad'] || 
-                             data.chainTvls['monad'] || 
+      const monadChainData = data.chainTvls['Monad'] ||
+                             data.chainTvls['monad'] ||
                              data.chainTvls['MONAD'];
-      
+
       if (monadChainData && monadChainData.tvl && Array.isArray(monadChainData.tvl)) {
         const historicalTVL = getTVLAtDate(monadChainData.tvl, endTimestamp);
         if (historicalTVL !== null) {
@@ -686,32 +687,60 @@ async function fetchProtocolTVL(protocolSlug: string, endTimestamp: number): Pro
           isHistorical = true;
         }
       }
+
+      // For lending protocols like Accountable, also get borrowed amount
+      // DeFiLlama stores this as "Monad-borrowed" in chainTvls
+      const monadBorrowedData = data.chainTvls['Monad-borrowed'] ||
+                                data.chainTvls['monad-borrowed'];
+
+      if (monadBorrowedData && monadBorrowedData.tvl && Array.isArray(monadBorrowedData.tvl)) {
+        const historicalBorrowed = getTVLAtDate(monadBorrowedData.tvl, endTimestamp);
+        if (historicalBorrowed !== null) {
+          borrowedAmount = historicalBorrowed;
+        }
+      }
     }
-    
+
     // Fallback to current TVL if historical data not available
     if (resultTVL === null && data.currentChainTvls && typeof data.currentChainTvls === 'object') {
-      const monadTVL = data.currentChainTvls['Monad'] || 
-                       data.currentChainTvls['monad'] || 
+      const monadTVL = data.currentChainTvls['Monad'] ||
+                       data.currentChainTvls['monad'] ||
                        data.currentChainTvls['MONAD'];
-      
+
       if (monadTVL !== undefined && monadTVL !== null) {
         resultTVL = parseFloat(String(monadTVL));
         isHistorical = false;
       }
-      
+
       // If no Monad-specific TVL, return total TVL for single-chain protocols
       if (resultTVL === null && data.chains && Array.isArray(data.chains) && data.chains.length === 1) {
         resultTVL = data.tvl || null;
         isHistorical = false;
       }
+
+      // Also get current borrowed amount for lending protocols
+      if (borrowedAmount === null) {
+        const monadBorrowed = data.currentChainTvls['Monad-borrowed'] ||
+                              data.currentChainTvls['monad-borrowed'];
+        if (monadBorrowed !== undefined && monadBorrowed !== null) {
+          borrowedAmount = parseFloat(String(monadBorrowed));
+        }
+      }
     }
-    
+
+    // For Accountable (and other lending protocols), TVL should include borrowed amount
+    // This gives a more accurate picture of the protocol's total capital deployment
+    if (protocolSlug === 'accountable' && resultTVL !== null && borrowedAmount !== null) {
+      console.log(`[TVL] Accountable: TVL=${resultTVL}, Borrowed=${borrowedAmount}, Total=${resultTVL + borrowedAmount}`);
+      resultTVL = resultTVL + borrowedAmount;
+    }
+
     // Cache the result if we got a value
     // Use longer TTL for historical data (data from the past never changes)
     if (resultTVL !== null) {
       await cacheDefillamaTVL(protocolSlug, endDate, resultTVL, isHistorical);
     }
-    
+
     return { tvl: resultTVL, isHistorical };
   } catch (error) {
     console.error(`Error fetching TVL for ${protocolSlug}:`, error);
