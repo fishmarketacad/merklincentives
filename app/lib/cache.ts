@@ -62,6 +62,8 @@ const CACHE_TTL = {
   DEFILLAMA_TVL_HISTORICAL: 604800, // 7 days - historical TVL never changes (reduced from 30 days)
   DUNE_VOLUME: 604800,             // 7 days - volumes are historical (reduced from 30 days)
   MERKL_CAMPAIGNS_HISTORICAL: 604800, // 7 days - historical campaigns (reduced from 30 days)
+  EPOCH_DATA_CURRENT: 3600,        // 1 hour - current epoch data
+  EPOCH_DATA_HISTORICAL: 604800,   // 7 days - historical epoch data never changes
 };
 
 /**
@@ -107,26 +109,29 @@ export async function setCache<T>(key: string, value: T, ttl: number): Promise<v
  * Generate cache keys
  */
 export const CacheKeys = {
-  merklCampaigns: (protocolId: string, page: number) => 
+  merklCampaigns: (protocolId: string, page: number) =>
     `merkl:campaigns:monad:${protocolId}:page:${page}`,
-  
-  merklOpportunities: (page: number) => 
+
+  merklOpportunities: (page: number) =>
     `merkl:opportunities:monad:page:${page}`,
-  
-  defillamaTVL: (protocolSlug: string, date: string) => 
+
+  defillamaTVL: (protocolSlug: string, date: string) =>
     `defillama:tvl:${protocolSlug}:${date}`,
-  
-  duneVolume: (queryId: number, tokenPair: string | null) => 
+
+  duneVolume: (queryId: number, tokenPair: string | null) =>
     `dune:volume:${queryId}:${tokenPair || 'all'}`,
-  
-  merklCampaignDetails: (campaignId: string) => 
+
+  merklCampaignDetails: (campaignId: string) =>
     `merkl:campaign:details:${campaignId}`,
-  
-  merklCampaignMetrics: (campaignId: string) => 
+
+  merklCampaignMetrics: (campaignId: string) =>
     `merkl:campaign:metrics:${campaignId}`,
-  
-  merklOpportunity: (opportunityId: string) => 
+
+  merklOpportunity: (opportunityId: string) =>
     `merkl:opportunity:${opportunityId}`,
+
+  epochData: (epochId: string) =>
+    `epoch:data:${epochId}`,
 };
 
 /**
@@ -291,5 +296,29 @@ export async function getCachedMerklOpportunity(
   opportunityId: string
 ): Promise<any | null> {
   const key = CacheKeys.merklOpportunity(opportunityId);
+  return await getCache<any>(key);
+}
+
+/**
+ * Cache epoch data
+ * @param isHistorical - If true, uses longer TTL (7 days) for completed epochs
+ */
+export async function cacheEpochData(
+  epochId: string,
+  data: any,
+  isHistorical: boolean = false
+): Promise<void> {
+  const key = CacheKeys.epochData(epochId);
+  const ttl = isHistorical ? CACHE_TTL.EPOCH_DATA_HISTORICAL : CACHE_TTL.EPOCH_DATA_CURRENT;
+  await setCache(key, data, ttl);
+}
+
+/**
+ * Get cached epoch data
+ */
+export async function getCachedEpochData(
+  epochId: string
+): Promise<any | null> {
+  const key = CacheKeys.epochData(epochId);
   return await getCache<any>(key);
 }

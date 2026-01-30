@@ -1,64 +1,49 @@
 /**
  * Merkl Incentives Dashboard - Google Apps Script
- *
- * This script fetches data from your deployed Merkl dashboard and populates
- * the spreadsheet with incentive data for the current epoch.
+ * Fetches data from deployed Merkl dashboard and populates the spreadsheet.
  *
  * SETUP:
- * 1. Open your Google Sheet
- * 2. Go to Extensions > Apps Script
- * 3. Paste this entire script
- * 4. Update the CONFIG section below with your settings
- * 5. Save and run "fetchAndUpdateSheet" or use the custom menu
+ * 1. Open Google Sheet > Extensions > Apps Script
+ * 2. Paste this script and update CONFIG below
+ * 3. Save and refresh sheet - you'll see "Merkl Dashboard" menu
+ *
+ * COLUMNS UPDATED BY SCRIPT:
+ * - Column J: MON token quantity (raw amount)
+ * - Column L: External incentives (USD)
+ * - Column O: TVL
+ * - Column P: Volume
+ *
+ * COLUMNS LEFT FOR YOUR FORMULAS:
+ * - Column K: MF actual incentive (J × MON 7-day SMA price)
+ * - Column M: Adjusted + External (K + L)
+ * - Columns Q, R, S: TVL Cost calculations
  */
 
-// ============================================================================
-// CONFIGURATION - Update these values for your setup
-// ============================================================================
 const CONFIG = {
-  // Your deployed Merkl dashboard URL
   BASE_URL: 'https://merklincentives.vercel.app',
-
-  // Sheet name where data should be written
-  SHEET_NAME: 'Incentives Efficiency', // Update if your sheet has a different name
-
-  // Column where protocol names are (1-indexed)
-  PROTOCOL_COL: 4, // Column D
-
-  // Column where pool names are (1-indexed)
-  POOL_COL: 5, // Column E
-
-  // Row where data starts (after headers)
+  SHEET_NAME: 'Incentives Efficiency',
+  PROTOCOL_COL: 4,  // Column D
+  POOL_COL: 5,      // Column E
   DATA_START_ROW: 4,
 
-  // MON price - will be fetched automatically, but can set manual override
-  MON_PRICE_OVERRIDE: null, // Set to a number like 0.025 to override API price
+  // Fixed column assignments (change these if your sheet layout differs)
+  MON_QTY_COL: 10,      // Column J - MON token quantity
+  EXTERNAL_COL: 12,     // Column L - External incentives USD
+  TVL_COL: 15,          // Column O - TVL
+  VOLUME_COL: 16,       // Column P - Volume
 };
 
-// ============================================================================
-// MENU SETUP - Adds custom menu to Google Sheets
-// ============================================================================
 function onOpen() {
-  const ui = SpreadsheetApp.getUi();
-  ui.createMenu('Merkl Dashboard')
+  SpreadsheetApp.getUi().createMenu('Merkl Dashboard')
     .addItem('Fetch Current Week Data', 'fetchAndUpdateSheet')
-    .addItem('Fetch Custom Date Range', 'showDateRangeDialog')
-    .addItem('View API Status', 'checkAPIStatus')
+    .addItem('Check API Status', 'checkAPIStatus')
     .addToUi();
 }
 
-// ============================================================================
-// MAIN FUNCTIONS
-// ============================================================================
-
-/**
- * Main function to fetch data and update the sheet
- * Uses the last 7 days by default
- */
 function fetchAndUpdateSheet() {
   const ui = SpreadsheetApp.getUi();
 
-  // Calculate default date range (last 7 days ending yesterday)
+  // Default: last 7 days ending yesterday
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
   const sevenDaysAgo = new Date(yesterday);
@@ -67,390 +52,251 @@ function fetchAndUpdateSheet() {
   const endDate = formatDate(yesterday);
   const startDate = formatDate(sevenDaysAgo);
 
-  // Ask user to confirm or modify dates
-  const response = ui.prompt(
-    'Fetch Merkl Data',
-    `Fetching data for:\nStart: ${startDate}\nEnd: ${endDate}\n\nEnter new dates (format: YYYY-MM-DD,YYYY-MM-DD) or click OK to use these:`,
-    ui.ButtonSet.OK_CANCEL
-  );
+  // Get date range
+  const dateResp = ui.prompt('Date Range',
+    `Default: ${startDate} to ${endDate}\n\nEnter dates (YYYY-MM-DD,YYYY-MM-DD) or OK for default:`,
+    ui.ButtonSet.OK_CANCEL);
+  if (dateResp.getSelectedButton() !== ui.Button.OK) return;
 
-  if (response.getSelectedButton() !== ui.Button.OK) {
-    return;
+  let [finalStart, finalEnd] = [startDate, endDate];
+  if (dateResp.getResponseText().trim()) {
+    [finalStart, finalEnd] = dateResp.getResponseText().split(',').map(s => s.trim());
   }
 
-  let finalStartDate = startDate;
-  let finalEndDate = endDate;
-
-  if (response.getResponseText().trim()) {
-    const parts = response.getResponseText().split(',');
-    if (parts.length === 2) {
-      finalStartDate = parts[0].trim();
-      finalEndDate = parts[1].trim();
-    }
-  }
-
-  // Show progress
-  ui.alert('Fetching data...', `Fetching from ${finalStartDate} to ${finalEndDate}.\nThis may take a minute.`, ui.ButtonSet.OK);
+  ui.alert('Fetching...', `Fetching data for ${finalStart} to ${finalEnd}...\n\nThis will update:\n- Column J: MON quantity\n- Column L: External incentives\n- Column O: TVL\n- Column P: Volume`, ui.ButtonSet.OK);
 
   try {
-    const data = fetchMerklData(finalStartDate, finalEndDate);
-    updateSpreadsheet(data, finalStartDate, finalEndDate);
-    ui.alert('Success!', `Data updated successfully!\n\nPools found: ${data.pools.length}\nMON Price: $${data.monPrice.toFixed(4)}`, ui.ButtonSet.OK);
-  } catch (error) {
-    ui.alert('Error', `Failed to fetch data: ${error.message}`, ui.ButtonSet.OK);
-    console.error(error);
+    const data = fetchMerklData(finalStart, finalEnd);
+    const updated = updateSpreadsheet(data);
+    ui.alert('Success!', `Updated ${updated} rows\nMON Price (for reference): $${data.monPrice.toFixed(4)}`, ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert('Error', e.message, ui.ButtonSet.OK);
+    console.error(e);
   }
 }
 
-/**
- * Fetch all data from the Merkl dashboard APIs
- */
 function fetchMerklData(startDate, endDate) {
-  // Get list of all protocols
   const protocols = [
     'clober', 'curvance', 'gearbox', 'kuru', 'morpho', 'euler',
     'pancake-swap', 'uniswap', 'monday-trade', 'renzo', 'upshift',
     'townsquare', 'Beefy', 'accountable', 'curve', 'lfj', 'wlfi'
   ];
 
-  // Fetch MON price
-  let monPrice = CONFIG.MON_PRICE_OVERRIDE;
-  if (!monPrice) {
-    try {
-      const priceResponse = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/mon-price`);
-      const priceData = JSON.parse(priceResponse.getContentText());
-      monPrice = priceData.price || 0.025;
-    } catch (e) {
-      console.log('Failed to fetch MON price, using default');
-      monPrice = 0.025;
+  // Fetch MON price (for reference only, not used in calculations)
+  let monPrice = 0;
+  try {
+    const resp = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/mon-price`);
+    monPrice = JSON.parse(resp.getContentText()).price || 0;
+  } catch (e) { monPrice = 0; }
+
+  // Fetch incentives from Merkl API
+  const monResp = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/query-mon-spent`, {
+    method: 'POST', contentType: 'application/json',
+    payload: JSON.stringify({ protocols, startDate, endDate, token: 'MON' }),
+    muteHttpExceptions: true
+  });
+  if (monResp.getResponseCode() !== 200) throw new Error(`API error: ${monResp.getContentText()}`);
+  const monData = JSON.parse(monResp.getContentText());
+
+  // Fetch TVL/Volume from DeFiLlama/Dune
+  const tvlResp = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/protocol-tvl`, {
+    method: 'POST', contentType: 'application/json',
+    payload: JSON.stringify({ protocols, startDate, endDate }),
+    muteHttpExceptions: true
+  });
+  const tvlData = tvlResp.getResponseCode() === 200 ? JSON.parse(tvlResp.getContentText()) : { tvlData: {}, dexVolumeData: {} };
+
+  // Fetch per-market volumes (PUT endpoint)
+  let marketVolumes = {};
+  try {
+    const markets = [];
+    for (const platform of (monData.results || [])) {
+      for (const funding of (platform.fundingProtocols || [])) {
+        for (const market of (funding.markets || [])) {
+          markets.push({
+            protocol: platform.platformProtocol,
+            marketName: market.marketName
+          });
+        }
+      }
     }
+
+    if (markets.length > 0) {
+      const volResp = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/protocol-tvl`, {
+        method: 'PUT', contentType: 'application/json',
+        payload: JSON.stringify({ markets, startDate, endDate }),
+        muteHttpExceptions: true
+      });
+      if (volResp.getResponseCode() === 200) {
+        marketVolumes = JSON.parse(volResp.getContentText()).marketVolumes || {};
+      }
+    }
+  } catch (e) {
+    console.log('Per-market volume fetch failed:', e);
   }
 
-  // Fetch incentives data (MON spent)
-  const monSpentResponse = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/query-mon-spent`, {
-    method: 'POST',
-    contentType: 'application/json',
-    payload: JSON.stringify({
-      protocols: protocols,
-      startDate: startDate,
-      endDate: endDate,
-      token: 'MON'
-    }),
-    muteHttpExceptions: true
-  });
-
-  if (monSpentResponse.getResponseCode() !== 200) {
-    throw new Error(`MON spent API error: ${monSpentResponse.getContentText()}`);
-  }
-
-  const monSpentData = JSON.parse(monSpentResponse.getContentText());
-
-  // Fetch TVL and volume data
-  const tvlResponse = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/protocol-tvl`, {
-    method: 'POST',
-    contentType: 'application/json',
-    payload: JSON.stringify({
-      protocols: protocols,
-      startDate: startDate,
-      endDate: endDate
-    }),
-    muteHttpExceptions: true
-  });
-
-  let tvlData = { tvlData: {}, dexVolumeData: {} };
-  if (tvlResponse.getResponseCode() === 200) {
-    tvlData = JSON.parse(tvlResponse.getContentText());
-  }
-
-  // Process into a flat list of pools
+  // Process pools
   const pools = [];
-
-  for (const platform of (monSpentData.results || [])) {
-    const protocolKey = platform.platformProtocol.toLowerCase();
-
+  for (const platform of (monData.results || [])) {
+    const pKey = platform.platformProtocol.toLowerCase();
     for (const funding of (platform.fundingProtocols || [])) {
       for (const market of (funding.markets || [])) {
-        // Get protocol-level TVL and volume as fallback
-        const protocolTVL = tvlData.tvlData?.[protocolKey] || null;
-        const protocolVolume = tvlData.dexVolumeData?.[protocolKey] || null;
+        // Try to get per-market volume
+        const marketKey = `${platform.platformProtocol.toLowerCase()}_${market.marketName}`;
+        const perMarketVol = marketVolumes[marketKey];
 
         pools.push({
           protocol: platform.platformProtocol,
           fundingProtocol: funding.fundingProtocol,
           pool: market.marketName,
-          incentivesMON: market.totalMON || 0,
+          incentivesMON: market.totalMON || 0,  // Raw MON quantity
           externalIncentiveUSD: market.externalIncentiveUSD || 0,
-          tvl: market.tvl || protocolTVL || null,
-          volume: protocolVolume?.volumeInRange || protocolVolume?.volume7d || null,
-          apr: market.apr || null,
+          tvl: market.tvl || null,
+          volume: perMarketVol?.volumeInRange || perMarketVol?.volume7d || null,
         });
       }
     }
   }
 
-  // Add protocols without Merkl campaigns (like LFJ)
-  const protocolsInResults = new Set(pools.map(p => p.protocol.toLowerCase()));
-  const protocolsToAddManually = ['lfj'];
-
-  for (const protocol of protocolsToAddManually) {
-    if (!protocolsInResults.has(protocol)) {
-      const tvl = tvlData.tvlData?.[protocol] || null;
-      const volume = tvlData.dexVolumeData?.[protocol];
-      const volumeValue = volume?.volumeInRange || volume?.volume7d || null;
-
-      if (tvl || volumeValue) {
-        pools.push({
-          protocol: protocol,
-          fundingProtocol: 'none',
-          pool: '-',
-          incentivesMON: 0,
-          externalIncentiveUSD: 0,
-          tvl: tvl,
-          volume: volumeValue,
-          apr: null,
-        });
-      }
+  // Add LFJ (no Merkl campaigns but has TVL/volume)
+  if (!pools.some(p => p.protocol.toLowerCase() === 'lfj')) {
+    const tvl = tvlData.tvlData?.['lfj'];
+    const vol = tvlData.dexVolumeData?.['lfj'];
+    if (tvl || vol) {
+      pools.push({
+        protocol: 'lfj', fundingProtocol: 'none', pool: '-',
+        incentivesMON: 0, externalIncentiveUSD: 0,
+        tvl: tvl || null,
+        volume: vol?.volumeInRange || vol?.volume7d || null,
+      });
     }
   }
 
-  return {
-    pools: pools,
-    monPrice: monPrice,
-    startDate: startDate,
-    endDate: endDate,
-    periodDays: daysBetween(startDate, endDate) + 1,
-    protocolTVL: tvlData.tvlData || {},
-    protocolVolume: tvlData.dexVolumeData || {},
-  };
+  return { pools, monPrice, protocolTVL: tvlData.tvlData || {}, protocolVolume: tvlData.dexVolumeData || {} };
 }
 
-/**
- * Update the spreadsheet with fetched data
- */
-function updateSpreadsheet(data, startDate, endDate) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+function updateSpreadsheet(data) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEET_NAME);
+  if (!sheet) throw new Error(`Sheet "${CONFIG.SHEET_NAME}" not found`);
 
-  if (!sheet) {
-    throw new Error(`Sheet "${CONFIG.SHEET_NAME}" not found. Check CONFIG.SHEET_NAME`);
-  }
-
-  // Ask user which columns to update
-  const ui = SpreadsheetApp.getUi();
-  const colResponse = ui.prompt(
-    'Select Columns to Update',
-    'Enter the column letters for this epoch\'s data:\n\n' +
-    'Format: MF_ACTUAL,EXTERNAL,TVL,VOLUME\n' +
-    'Example: I,K,N,O\n\n' +
-    '(These are the columns for MF Incentives actual, External incentives, TVL, Volume)',
-    ui.ButtonSet.OK_CANCEL
-  );
-
-  if (colResponse.getSelectedButton() !== ui.Button.OK) {
-    return;
-  }
-
-  const colLetters = colResponse.getResponseText().split(',').map(c => c.trim().toUpperCase());
-  if (colLetters.length !== 4) {
-    throw new Error('Please enter exactly 4 column letters separated by commas');
-  }
-
-  const [mfActualCol, externalCol, tvlCol, volumeCol] = colLetters.map(letterToColumn);
-
-  // Build a lookup map: protocol+pool -> row number
   const lastRow = sheet.getLastRow();
-  const protocolRange = sheet.getRange(CONFIG.DATA_START_ROW, CONFIG.PROTOCOL_COL, lastRow - CONFIG.DATA_START_ROW + 1, 1).getValues();
-  const poolRange = sheet.getRange(CONFIG.DATA_START_ROW, CONFIG.POOL_COL, lastRow - CONFIG.DATA_START_ROW + 1, 1).getValues();
+  const protocolVals = sheet.getRange(CONFIG.DATA_START_ROW, CONFIG.PROTOCOL_COL, lastRow - CONFIG.DATA_START_ROW + 1, 1).getValues();
+  const poolVals = sheet.getRange(CONFIG.DATA_START_ROW, CONFIG.POOL_COL, lastRow - CONFIG.DATA_START_ROW + 1, 1).getValues();
 
+  // Build row lookup
   const rowLookup = {};
-  for (let i = 0; i < protocolRange.length; i++) {
-    const protocol = String(protocolRange[i][0]).toLowerCase().trim();
-    const pool = String(poolRange[i][0]).toLowerCase().trim();
+  for (let i = 0; i < protocolVals.length; i++) {
+    const protocol = normalizeProtocol(protocolVals[i][0]);
+    const pool = normalizePool(poolVals[i][0]);
     const row = CONFIG.DATA_START_ROW + i;
-
     if (protocol) {
-      // Create lookup key
-      const key = `${protocol}|${pool}`;
-      rowLookup[key] = row;
-
-      // Also create protocol-only key for "ALL POOLS" rows
-      if (pool === 'all pools' || pool === '-' || pool === '') {
-        rowLookup[`${protocol}|all`] = row;
-      }
+      rowLookup[`${protocol}|${pool}`] = row;
+      if (pool === 'all pools' || pool === '-' || !pool) rowLookup[`${protocol}|all`] = row;
     }
   }
 
-  // Aggregate data by protocol for "ALL POOLS" rows
-  const protocolTotals = {};
-  for (const pool of data.pools) {
-    const protocolKey = pool.protocol.toLowerCase();
-    if (!protocolTotals[protocolKey]) {
-      protocolTotals[protocolKey] = {
-        incentivesMON: 0,
-        externalIncentiveUSD: 0,
-        tvl: 0,
-        volume: 0,
-      };
-    }
-    protocolTotals[protocolKey].incentivesMON += pool.incentivesMON || 0;
-    protocolTotals[protocolKey].externalIncentiveUSD += pool.externalIncentiveUSD || 0;
-    // For TVL/Volume, use the protocol-level data or max of pools
-    if (pool.tvl) {
-      protocolTotals[protocolKey].tvl = Math.max(protocolTotals[protocolKey].tvl, pool.tvl);
-    }
-    if (pool.volume) {
-      protocolTotals[protocolKey].volume = Math.max(protocolTotals[protocolKey].volume, pool.volume);
+  // Aggregate protocol totals for "ALL POOLS" rows
+  const totals = {};
+  for (const p of data.pools) {
+    const key = normalizeProtocol(p.protocol);
+    if (!totals[key]) totals[key] = { mon: 0, ext: 0, tvl: 0, vol: 0 };
+    totals[key].mon += p.incentivesMON || 0;
+    totals[key].ext += p.externalIncentiveUSD || 0;
+    if (p.tvl) totals[key].tvl = Math.max(totals[key].tvl, p.tvl);
+    if (p.volume) totals[key].vol = Math.max(totals[key].vol, p.volume);
+  }
+
+  // Use protocol-level TVL/Volume data
+  for (const [p, tvl] of Object.entries(data.protocolTVL)) {
+    const key = normalizeProtocol(p);
+    if (!totals[key]) totals[key] = { mon: 0, ext: 0, tvl: 0, vol: 0 };
+    totals[key].tvl = tvl;
+  }
+  for (const [p, v] of Object.entries(data.protocolVolume)) {
+    const key = normalizeProtocol(p);
+    if (totals[key] && v) {
+      const vol = v.volumeInRange || v.volume7d || 0;
+      if (vol > 0) totals[key].vol = vol;
     }
   }
 
-  // Use protocol-level TVL/Volume if available (more accurate)
-  for (const [protocol, tvl] of Object.entries(data.protocolTVL)) {
-    if (protocolTotals[protocol.toLowerCase()]) {
-      protocolTotals[protocol.toLowerCase()].tvl = tvl;
-    }
-  }
-  for (const [protocol, volData] of Object.entries(data.protocolVolume)) {
-    if (protocolTotals[protocol.toLowerCase()] && volData) {
-      const vol = volData.volumeInRange || volData.volume7d || volData.volume30d || 0;
-      if (vol > 0) {
-        protocolTotals[protocol.toLowerCase()].volume = vol;
-      }
-    }
-  }
+  let updated = 0;
 
   // Update individual pool rows
-  let updatedCount = 0;
-  for (const pool of data.pools) {
-    const protocolKey = normalizeProtocolName(pool.protocol);
-    const poolKey = normalizePoolName(pool.pool);
-    const lookupKey = `${protocolKey}|${poolKey}`;
-
-    const row = rowLookup[lookupKey];
+  for (const p of data.pools) {
+    const key = `${normalizeProtocol(p.protocol)}|${normalizePool(p.pool)}`;
+    const row = rowLookup[key];
     if (row) {
-      // Calculate incentive USD value
-      const incentiveUSD = pool.incentivesMON * data.monPrice;
+      // Column J: MON quantity (raw token amount)
+      sheet.getRange(row, CONFIG.MON_QTY_COL).setValue(p.incentivesMON);
 
-      // Update cells
-      sheet.getRange(row, mfActualCol).setValue(incentiveUSD);
-      sheet.getRange(row, externalCol).setValue(pool.externalIncentiveUSD || 0);
-      if (pool.tvl) sheet.getRange(row, tvlCol).setValue(pool.tvl);
-      if (pool.volume) sheet.getRange(row, volumeCol).setValue(pool.volume);
+      // Column L: External incentives USD
+      sheet.getRange(row, CONFIG.EXTERNAL_COL).setValue(p.externalIncentiveUSD || 0);
 
-      updatedCount++;
+      // Column O: TVL
+      if (p.tvl) sheet.getRange(row, CONFIG.TVL_COL).setValue(p.tvl);
+
+      // Column P: Volume
+      if (p.volume) sheet.getRange(row, CONFIG.VOLUME_COL).setValue(p.volume);
+
+      updated++;
     }
   }
 
-  // Update "ALL POOLS" rows with protocol totals
-  for (const [protocol, totals] of Object.entries(protocolTotals)) {
-    const allPoolsKey = `${protocol}|all`;
-    const row = rowLookup[allPoolsKey];
+  // Update "ALL POOLS" rows with aggregated totals
+  for (const [protocol, t] of Object.entries(totals)) {
+    const row = rowLookup[`${protocol}|all`];
     if (row) {
-      const incentiveUSD = totals.incentivesMON * data.monPrice;
-      sheet.getRange(row, mfActualCol).setValue(incentiveUSD);
-      sheet.getRange(row, externalCol).setValue(totals.externalIncentiveUSD);
-      if (totals.tvl) sheet.getRange(row, tvlCol).setValue(totals.tvl);
-      if (totals.volume) sheet.getRange(row, volumeCol).setValue(totals.volume);
-      updatedCount++;
+      // Column J: Total MON quantity
+      sheet.getRange(row, CONFIG.MON_QTY_COL).setValue(t.mon);
+
+      // Column L: Total External incentives
+      sheet.getRange(row, CONFIG.EXTERNAL_COL).setValue(t.ext);
+
+      // Column O: Protocol TVL
+      if (t.tvl) sheet.getRange(row, CONFIG.TVL_COL).setValue(t.tvl);
+
+      // Column P: Protocol Volume
+      if (t.vol) sheet.getRange(row, CONFIG.VOLUME_COL).setValue(t.vol);
+
+      updated++;
     }
   }
 
-  console.log(`Updated ${updatedCount} rows`);
+  return updated;
 }
 
-/**
- * Check API status
- */
 function checkAPIStatus() {
   const ui = SpreadsheetApp.getUi();
-
   try {
-    const response = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/mon-price`, {
-      muteHttpExceptions: true
-    });
-
-    if (response.getResponseCode() === 200) {
-      const data = JSON.parse(response.getContentText());
-      ui.alert('API Status', `API is online!\n\nMON Price: $${data.price}\nBase URL: ${CONFIG.BASE_URL}`, ui.ButtonSet.OK);
+    const resp = UrlFetchApp.fetch(`${CONFIG.BASE_URL}/api/mon-price`, { muteHttpExceptions: true });
+    if (resp.getResponseCode() === 200) {
+      const data = JSON.parse(resp.getContentText());
+      ui.alert('API Online', `MON Price: $${data.price}\nURL: ${CONFIG.BASE_URL}`, ui.ButtonSet.OK);
     } else {
-      ui.alert('API Status', `API returned error: ${response.getResponseCode()}\n${response.getContentText()}`, ui.ButtonSet.OK);
+      ui.alert('API Error', `Code: ${resp.getResponseCode()}`, ui.ButtonSet.OK);
     }
-  } catch (error) {
-    ui.alert('API Status', `Failed to connect: ${error.message}`, ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert('Connection Failed', e.message, ui.ButtonSet.OK);
   }
 }
 
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
+// Helpers
+function formatDate(d) { return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd'); }
 
-function formatDate(date) {
-  return Utilities.formatDate(date, 'UTC', 'yyyy-MM-dd');
-}
-
-function daysBetween(startDate, endDate) {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  return Math.floor((end - start) / (1000 * 60 * 60 * 24));
-}
-
-function letterToColumn(letter) {
-  let column = 0;
-  for (let i = 0; i < letter.length; i++) {
-    column = column * 26 + (letter.charCodeAt(i) - 64);
-  }
-  return column;
-}
-
-function normalizeProtocolName(name) {
-  if (!name) return '';
-  return name.toLowerCase()
+function normalizeProtocol(n) {
+  if (!n) return '';
+  return n.toLowerCase()
     .replace(/[-_\s]+/g, '')
-    .replace('pancakeswap', 'pancakeswap')
     .replace('pancake-swap', 'pancakeswap')
-    .trim();
+    .replace('pancakeswap', 'pancakeswap');
 }
 
-function normalizePoolName(name) {
-  if (!name) return '';
-  const normalized = name.toLowerCase().trim();
-
-  // Handle "ALL POOLS" variations
-  if (normalized.includes('all pool') || normalized === '-') {
-    return 'all pools';
-  }
-
-  // Extract token pair from pool name (e.g., "MON/AUSD" from "Provide liquidity to MON/AUSD pool")
-  const tokenPairMatch = normalized.match(/([a-z0-9]+)[\/\-]([a-z0-9]+)/i);
-  if (tokenPairMatch) {
-    return `${tokenPairMatch[1]}/${tokenPairMatch[2]}`.toLowerCase();
-  }
-
-  return normalized;
+function normalizePool(n) {
+  if (!n) return '';
+  const s = n.toLowerCase().trim();
+  if (s.includes('all pool') || s === '-') return 'all pools';
+  // Match common pool name patterns like "WBTC/MON", "WETH-USDC", etc.
+  const m = s.match(/([a-z0-9]+)[\/\-]([a-z0-9]+)/i);
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : s;
 }
-
-// ============================================================================
-// PROTOCOL NAME MAPPING
-// ============================================================================
-// Maps various protocol name formats to the canonical name used in your spreadsheet
-
-const PROTOCOL_ALIASES = {
-  'pancake-swap': 'pancakeswap',
-  'pancakeswap': 'pancakeswap',
-  'uniswap': 'uniswap',
-  'curve': 'curve',
-  'curve-dex': 'curve',
-  'morpho': 'morpho',
-  'euler': 'euler',
-  'clober': 'clober',
-  'kuru': 'kuru',
-  'lfj': 'lfj',
-  'gearbox': 'gearbox',
-  'curvance': 'curvance',
-  'accountable': 'accountable',
-  'monday-trade': 'monday trade',
-  'mondaytrade': 'monday trade',
-  'townsquare': 'townsquare',
-  'renzo': 'renzo',
-  'wlfi': 'wlfi',
-  'beefy': 'beefy',
-};

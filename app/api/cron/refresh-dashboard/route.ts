@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setCache, updateAIAnalysis } from '@/app/lib/dashboardCache';
+import { getCurrentEpoch } from '@/lib/epochs';
 
 // Common protocols list (same as frontend)
 const commonProtocols = [
@@ -674,6 +675,22 @@ export async function GET(request: NextRequest) {
       });
     
     console.log('[Cron] AI analysis HTTP request initiated (running in separate function instance)');
+
+    // Also refresh current epoch data for the spreadsheet export page
+    try {
+      const currentEpoch = getCurrentEpoch();
+      console.log('[Cron] Refreshing current epoch data:', currentEpoch.id);
+      const epochUrl = addBypassToUrl(`${baseUrl}/api/epoch-data`);
+      fetch(epochUrl, {
+        method: 'POST',
+        headers: internalHeaders,
+        body: JSON.stringify({ epochId: currentEpoch.id }),
+      })
+        .then((res) => console.log('[Cron] Epoch data refresh status:', res.status))
+        .catch((err) => console.warn('[Cron] Epoch data refresh failed:', err.message));
+    } catch (epochError: any) {
+      console.warn('[Cron] Failed to trigger epoch refresh:', epochError.message);
+    }
 
     return NextResponse.json({
       success: true,
