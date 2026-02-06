@@ -21,6 +21,57 @@ function Tooltip({ children, text }: { children: React.ReactNode; text: string }
   );
 }
 
+// Helper to format large numbers for tooltip display
+function formatTooltipNumber(val: number): string {
+  if (val >= 1e9) return `$${(val / 1e9).toFixed(2)}B`;
+  if (val >= 1e6) return `$${(val / 1e6).toFixed(2)}M`;
+  if (val >= 1e3) return `$${(val / 1e3).toFixed(1)}K`;
+  return `$${val.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+// TVL Cost tooltip showing calculation breakdown
+function TvlCostTooltip({
+  children,
+  incentivesUSD,
+  tvl,
+  epochDays,
+  result,
+  isAdjusted = false
+}: {
+  children: React.ReactNode;
+  incentivesUSD: number;
+  tvl: number | null;
+  epochDays: number;
+  result: number | null;
+  isAdjusted?: boolean;
+}) {
+  if (!tvl || tvl === 0 || result === null) {
+    return <>{children}</>;
+  }
+
+  const annualized = (incentivesUSD / epochDays) * 365;
+  const label = isAdjusted ? 'Total Incentives' : 'MON Value';
+
+  return (
+    <span className="group relative cursor-help">
+      {children}
+      <span className="pointer-events-none absolute top-full right-0 mt-1 rounded bg-gray-900 px-3 py-2 text-xs text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity duration-75 z-50 border border-gray-600 shadow-lg whitespace-pre font-mono">
+        <span className="text-gray-400 font-sans">Formula: ({label} ÷ days × 365) ÷ TVL × 100</span>
+        {'\n\n'}
+        <span className="text-blue-300">{label}:</span> ${incentivesUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        {'\n'}
+        <span className="text-blue-300">Days:</span> {epochDays}
+        {'\n'}
+        <span className="text-blue-300">Annualized:</span> ${annualized.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        {'\n'}
+        <span className="text-blue-300">TVL:</span> {formatTooltipNumber(tvl)}
+        {'\n\n'}
+        <span className="text-green-300">= {result.toFixed(2)}%</span>
+      </span>
+    </span>
+  );
+}
+
 // Helper to render value with previous epoch percentage change
 // invertColor: true means lower is better (for cost metrics)
 function ValueWithPrev({
@@ -1054,10 +1105,25 @@ export default function SpreadsheetPage() {
                                     <ValueWithPrev current={group.total.tvl} prev={prevTotal?.tvl} format="large" />
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
-                                    <ValueWithPrev current={group.total.tvlCost} prev={prevTotal?.tvlCost} format="percent" invertColor />
+                                    <TvlCostTooltip
+                                      incentivesUSD={group.total.monValueUSD}
+                                      tvl={group.total.tvl}
+                                      epochDays={epochDays}
+                                      result={group.total.tvlCost ?? null}
+                                    >
+                                      <ValueWithPrev current={group.total.tvlCost} prev={prevTotal?.tvlCost} format="percent" invertColor />
+                                    </TvlCostTooltip>
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
-                                    <ValueWithPrev current={group.total.adjustedTvlCost} prev={prevTotal?.adjustedTvlCost} format="percent" invertColor />
+                                    <TvlCostTooltip
+                                      incentivesUSD={group.total.adjustedTotal}
+                                      tvl={group.total.tvl}
+                                      epochDays={epochDays}
+                                      result={group.total.adjustedTvlCost ?? null}
+                                      isAdjusted
+                                    >
+                                      <ValueWithPrev current={group.total.adjustedTvlCost} prev={prevTotal?.adjustedTvlCost} format="percent" invertColor />
+                                    </TvlCostTooltip>
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
                                     <ValueWithPrev current={group.total.volume} prev={prevTotal?.volume} format="large" />
@@ -1092,10 +1158,25 @@ export default function SpreadsheetPage() {
                                 {pool.tvl ? `$${formatLargeNumber(pool.tvl)}` : '-'}
                               </td>
                               <td className="px-4 py-2 text-right font-mono text-xs">
-                                {pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : '-'}
+                                <TvlCostTooltip
+                                  incentivesUSD={pool.monValueUSD}
+                                  tvl={pool.tvl}
+                                  epochDays={epochDays}
+                                  result={pool.tvlCost ?? null}
+                                >
+                                  {pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : '-'}
+                                </TvlCostTooltip>
                               </td>
                               <td className="px-4 py-2 text-right font-mono text-xs">
-                                {pool.adjustedTvlCost ? `${pool.adjustedTvlCost.toFixed(2)}%` : '-'}
+                                <TvlCostTooltip
+                                  incentivesUSD={pool.adjustedTotal}
+                                  tvl={pool.tvl}
+                                  epochDays={epochDays}
+                                  result={pool.adjustedTvlCost ?? null}
+                                  isAdjusted
+                                >
+                                  {pool.adjustedTvlCost ? `${pool.adjustedTvlCost.toFixed(2)}%` : '-'}
+                                </TvlCostTooltip>
                               </td>
                               <td className="px-4 py-2 text-right font-mono text-xs">
                                 {pool.volume ? `$${formatLargeNumber(pool.volume)}` : '-'}
@@ -1135,10 +1216,25 @@ export default function SpreadsheetPage() {
                             <ValueWithPrev current={row.tvl} prev={prevFunder?.tvl} format="large" />
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
-                            <ValueWithPrev current={row.tvlCost} prev={prevFunder?.tvlCost} format="percent" invertColor />
+                            <TvlCostTooltip
+                              incentivesUSD={row.monValueUSD}
+                              tvl={row.tvl}
+                              epochDays={epochDays}
+                              result={row.tvlCost ?? null}
+                            >
+                              <ValueWithPrev current={row.tvlCost} prev={prevFunder?.tvlCost} format="percent" invertColor />
+                            </TvlCostTooltip>
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
-                            <ValueWithPrev current={row.adjustedTvlCost} prev={prevFunder?.adjustedTvlCost} format="percent" invertColor />
+                            <TvlCostTooltip
+                              incentivesUSD={row.adjustedTotal}
+                              tvl={row.tvl}
+                              epochDays={epochDays}
+                              result={row.adjustedTvlCost ?? null}
+                              isAdjusted
+                            >
+                              <ValueWithPrev current={row.adjustedTvlCost} prev={prevFunder?.adjustedTvlCost} format="percent" invertColor />
+                            </TvlCostTooltip>
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
                             <ValueWithPrev current={row.volume} prev={prevFunder?.volume} format="large" />
@@ -1169,10 +1265,25 @@ export default function SpreadsheetPage() {
                           {row.tvl ? `$${formatLargeNumber(row.tvl)}` : '-'}
                         </td>
                         <td className="px-4 py-3 text-right font-mono">
-                          {row.tvlCost ? `${row.tvlCost.toFixed(2)}%` : '-'}
+                          <TvlCostTooltip
+                            incentivesUSD={row.monValueUSD}
+                            tvl={row.tvl}
+                            epochDays={epochDays}
+                            result={row.tvlCost ?? null}
+                          >
+                            {row.tvlCost ? `${row.tvlCost.toFixed(2)}%` : '-'}
+                          </TvlCostTooltip>
                         </td>
                         <td className="px-4 py-3 text-right font-mono">
-                          {row.adjustedTvlCost ? `${row.adjustedTvlCost.toFixed(2)}%` : '-'}
+                          <TvlCostTooltip
+                            incentivesUSD={row.adjustedTotal}
+                            tvl={row.tvl}
+                            epochDays={epochDays}
+                            result={row.adjustedTvlCost ?? null}
+                            isAdjusted
+                          >
+                            {row.adjustedTvlCost ? `${row.adjustedTvlCost.toFixed(2)}%` : '-'}
+                          </TvlCostTooltip>
                         </td>
                         <td className="px-4 py-3 text-right font-mono">
                           {row.volume ? `$${formatLargeNumber(row.volume)}` : '-'}
