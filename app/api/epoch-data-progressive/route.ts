@@ -235,9 +235,11 @@ async function fetchWithTVL(epoch: Epoch, baseUrl: string): Promise<ProgressiveR
   };
 }
 
-// Stage 3: Complete (MON + TVL parallel + Volumes sequential)
+/// Stage 3: Complete (MON + TVL parallel + Volumes sequential)
 async function fetchComplete(epoch: Epoch, baseUrl: string): Promise<ProgressiveResponse> {
-  console.log('[Progressive Stage 3] Fetching complete data');
+  console.log('='.repeat(60));
+  console.log('[Progressive Stage 3] *** FETCHING VOLUMES ***');
+  console.log('='.repeat(60));
 
   // Get Stage 2 data (MON + TVL in parallel)
   const stage2Data = await fetchWithTVL(epoch, baseUrl);
