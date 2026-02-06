@@ -248,7 +248,8 @@ async function fetchDuneVolume(
         });
 
         if (!response.ok) {
-          console.error(`Dune API error for query ${queryId}:`, response.status, response.statusText);
+          const errorText = await response.text();
+          console.error(`[Dune API] Error for query ${queryId}:`, response.status, response.statusText, errorText.slice(0, 200));
           return {
             volumeInRange: null,
             volume24h: null,
@@ -258,6 +259,7 @@ async function fetchDuneVolume(
             isMonadSpecific: false,
           };
         }
+        console.log(`[Dune API] Query ${queryId} succeeded, fetching rows...`);
 
         const data = await response.json();
         
@@ -810,6 +812,8 @@ export async function PUT(request: NextRequest) {
       error?: string;
     }> = {};
 
+    console.log(`[PUT /api/protocol-tvl] Processing ${markets.length} markets for volume`);
+
     for (const market of markets) {
       const { protocol, marketName, tokenPair } = market;
       const marketKey = `${protocol.toLowerCase()}-${marketName}`;
@@ -881,6 +885,7 @@ export async function PUT(request: NextRequest) {
           }
         } else {
           // Uniswap, Kuru: Have token_pair, filter by token pair
+          console.log(`[PUT] DEX volume for ${protocolId}: market="${marketName}", tokenPair="${extractedTokenPair}"`);
           if (!extractedTokenPair) {
             marketVolumes[marketKey] = {
               volumeInRange: null,
@@ -900,6 +905,7 @@ export async function PUT(request: NextRequest) {
               extractedTokenPair
             );
             
+            console.log(`[PUT] Dune result for ${extractedTokenPair}:`, duneResult.volumeInRange, duneResult.volume7d);
             if (duneResult.volumeInRange !== null || duneResult.volume7d !== null) {
               marketVolumes[marketKey] = duneResult;
             } else {
