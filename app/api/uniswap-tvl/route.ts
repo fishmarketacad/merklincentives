@@ -1,21 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Uniswap V4 pools on Monad tracked for incentives
+// Uniswap V4 pools on Monad tracked for incentives (correct pool IDs from The Graph)
 const TRACKED_POOLS: Record<string, { name: string; poolId: string }> = {
-  'MON/AUSD': { name: 'MON/AUSD', poolId: '0xd63f84a5bdc7e1e9d2a01e2ed28a5d08668c9c8300000000000000000000000a' },
-  'WBTC/MON': { name: 'WBTC/MON', poolId: '0x7b72f9a4310b6fd6b2afc26db23a9b32bd0ab6b500000000000000000000000f' },
-  'WETH/MON': { name: 'WETH/MON', poolId: '0x5b2ebe36c2c57d73eb6bfaebb49fc0bffc4d5a4700000000000000000000000e' },
-  'MON/USDT': { name: 'MON/USDT', poolId: '0x4a9b9f42c0ef48e4e9887078a4eb5a49f6e6fbb1000000000000000000000011' },
-  'MON/USDC': { name: 'MON/USDC', poolId: '0xabb7bfcd51c0fc06fe718c4e8bdbc8d90edbd5e7000000000000000000000010' },
-  'WETH/AUSD': { name: 'WETH/AUSD', poolId: '0x47be46c5e45ee9f6a93bef0c6bae3eda6c546dfc00000000000000000000000d' },
-  'WBTC/AUSD': { name: 'WBTC/AUSD', poolId: '0x6aaebff8b305bcc8ba58f3a7d5cc22e364b23b2300000000000000000000000c' },
-  'USDC/AUSD': { name: 'USDC/AUSD', poolId: '0x0ff34c96adbd16e6ceab5a31fdba2cd2e8e4be2800000000000000000000000b' },
-  'MON/WMON': { name: 'MON/WMON', poolId: '0x7fd9f68ac6a25f7ac5b75fcc9e7ead55ad61c75b000000000000000000000012' },
-  'USDT/AUSD': { name: 'USDT/AUSD', poolId: '0x65a3e5e51a28e9f9e2e1ae4a3c5c7e9f9f9f9f90000000000000000000000013' },
-  'apMON/USDC': { name: 'apMON/USDC', poolId: '0x812a8a4005eca08c5dd04d4dd36f2e8e3a7e2ff2000000000000000000000014' },
-  'wUSD+/USDC': { name: 'wUSD+/USDC', poolId: '0xfb5e0ea0b13f2bd3b2b7e37ad1eb6b3aa99c8f16000000000000000000000015' },
-  'USDC/USDT': { name: 'USDC/USDT', poolId: '0xa3f0c39f3c4a22f26b90c20eb8eb29e0e5d1a7c1000000000000000000000016' },
-  'stkMON/MON': { name: 'stkMON/MON', poolId: '0xb5c0e36f2a7ef9b6ea4e6f9e8e8e8e8e8e8e8e80000000000000000000000017' },
+  'MON-AUSD': { name: 'MON-AUSD', poolId: '0xadaf30776f551bccdfb307c3fd8cdec198ca9a852434c8022ee32d1ccedd8219' },
+  'WBTC-MON': { name: 'WBTC-MON', poolId: '0x1c93dd2f2f47439330150bf728c3beeaad71de45420a49183214898b044b65d1' },
+  'WETH-MON': { name: 'WETH-MON', poolId: '0x3783b51e33900eb366a9e8473c76cda441e7170d2e5d96927f30c16a7add93aa' },
+  'wstETH-WETH': { name: 'wstETH-WETH', poolId: '0x55d7ed991392eb9597a76a5f41dfb964e291452c15107c0e64fd3d25925394ce' },
+  'weETH-WETH': { name: 'weETH-WETH', poolId: '0x2884b37c4a144e7047a1377ba7201d4b8ea318f0240369e01dc400f04e6cac40' },
+  'WETH-USDC': { name: 'WETH-USDC', poolId: '0xad408916c1c310da9c258d4c128a7bf50fd9edc42a218cc970da39cfc8a05d93' },
+  'MON-USDC': { name: 'MON-USDC', poolId: '0x18a9fc874581f3ba12b7898f80a683c66fd5877fd74b26a85ba9a3a79c549954' },
+  'AUSD-USDC': { name: 'AUSD-USDC', poolId: '0xd112fde908d7342135fc7297cc53d25bf7a11d6c6e21fe7a2df8a31b96e8c959' }, // 0.0009% fee tier
+  'AUSD-USDT0': { name: 'AUSD-USDT0', poolId: '0xe56868928b91fcd5ebeada3d0ec8767f2bbfeb1e7da181203d13f6af76b03bf9' },
+  'AUSD-XAUt0': { name: 'AUSD-XAUt0', poolId: '0xe1a8600687e4d06ca4787e5d0ccdacb1d360bfc9ca6ca2a49a688e14d0ef37b4' },
+  'WBTC-USDC': { name: 'WBTC-USDC', poolId: '0xd77c0f253764f5d5fbc78e13888afcc35c839262e6b21cd02baa9d8551a9898a' },
+  'wstETH-MON': { name: 'wstETH-MON', poolId: '0xbfd64af1b32c101eeff4f7d51a0f1f522c6a6cdf4de45ae340a58c3d1309032c' },
+  'WBTC-AUSD': { name: 'WBTC-AUSD', poolId: '0x6fed390faee91596851fdf2fa74c0f799d6bbe4f317b7d6ab16ef31fc974e4da' },
+  'USDT0-XAUt0': { name: 'USDT0-XAUt0', poolId: '0xe3b329308be3b1b2bcc5a3a5301e905051bb2c04f145b33b39558baa1113bb78' },
 };
 
 const SUBGRAPH_ID = '6CQtx9W4b9Kn9cjznXJNLeTvLV1hbpxkaJZkbyXirJuz';
@@ -95,28 +95,30 @@ async function fetchUniswapPoolTVL(
 ): Promise<Record<string, { poolId: string; tvlUSD: number; date: string }>> {
   const subgraphUrl = `https://gateway.thegraph.com/api/${apiKey}/subgraphs/id/${SUBGRAPH_ID}`;
 
-  // Convert date to timestamp (start of day)
-  const targetDate = new Date(dateStr);
+  // Convert date to timestamp (start of day UTC)
+  const targetDate = new Date(dateStr + 'T00:00:00Z');
   const timestamp = Math.floor(targetDate.getTime() / 1000);
 
-  const results: Record<string, { poolId: string; tvlUSD: number; date: string }> = {};
+  console.log(`[UniswapTVL] Fetching TVL for date ${dateStr}, timestamp ${timestamp}`);
+
+  const results: Record<string, { poolId: string; tvlUSD: number; volumeUSD: number; date: string }> = {};
 
   // Query each pool individually to get TVL at specific date
   for (const [poolName, poolInfo] of Object.entries(TRACKED_POOLS)) {
     try {
+      // Use exact date matching like the Google Apps Script
       const query = `
         query GetPoolDayData($poolId: String!, $timestamp: Int!) {
           poolDayDatas(
             where: {
               pool: $poolId,
-              date_lte: $timestamp
+              date: $timestamp
             }
-            orderBy: date
-            orderDirection: desc
             first: 1
           ) {
             date
             tvlUSD
+            volumeUSD
           }
         }
       `;
@@ -151,8 +153,12 @@ async function fetchUniswapPoolTVL(
         results[poolName] = {
           poolId: poolInfo.poolId,
           tvlUSD: parseFloat(poolDayData.tvlUSD) || 0,
+          volumeUSD: parseFloat(poolDayData.volumeUSD) || 0,
           date: new Date(poolDayData.date * 1000).toISOString().split('T')[0],
         };
+        console.log(`[UniswapTVL] ${poolName}: TVL=$${Math.round(parseFloat(poolDayData.tvlUSD)).toLocaleString()}`);
+      } else {
+        console.log(`[UniswapTVL] ${poolName}: No data found`);
       }
     } catch (err) {
       console.error(`[UniswapTVL] Error fetching ${poolName}:`, err);
