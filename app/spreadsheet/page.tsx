@@ -345,7 +345,15 @@ export default function SpreadsheetPage() {
         }
         const stage3Data = await stage3Response.json();
         console.log('[Client] Stage 3 complete. Warnings:', stage3Data.warnings);
-        console.log('[Client] Sample pool volumes:', stage3Data.pools?.slice(0, 5).map((p: any) => ({ pool: p.pool, volume: p.volume })));
+        // Show DEX pools specifically (Uniswap, Kuru, Curve, PancakeSwap)
+        const dexPools = stage3Data.pools?.filter((p: any) =>
+          ['uniswap', 'kuru', 'curve', 'pancake'].some(dex => p.protocol.toLowerCase().includes(dex))
+        );
+        console.log('[Client] DEX pool volumes:', dexPools?.slice(0, 8).map((p: any) => ({
+          protocol: p.protocol,
+          pool: p.pool.substring(0, 40),
+          volume: p.volume
+        })));
         setEpochData(stage3Data);
 
         // Cache the complete data
