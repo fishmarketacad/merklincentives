@@ -945,8 +945,8 @@ export default function SpreadsheetPage() {
           </div>
         )}
 
-        {/* Data Table */}
-        {recalculatedData && !loading && (
+        {/* Data Table - show as soon as Stage 1 data is available */}
+        {recalculatedData && (
           <div className="bg-gray-800 rounded-lg overflow-hidden">
             {/* Expand/Collapse controls for grouped view */}
             {viewMode === 'protocols' && (
