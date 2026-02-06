@@ -449,10 +449,16 @@ export default function SpreadsheetPage() {
     return { ...prevEpochData, protocolTotals, funderTotals };
   }, [prevEpochData, prevEpoch, prevEpochDays]);
 
-  // Handler for sorting
+  // Handler for sorting (cycles: none → desc → asc → none)
   const handleSort = (column: string) => {
     if (sortColumn === column) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+      if (sortDirection === 'desc') {
+        setSortDirection('asc');
+      } else {
+        // Reset to no sort
+        setSortColumn(null);
+        setSortDirection('desc');
+      }
     } else {
       setSortColumn(column);
       setSortDirection('desc');

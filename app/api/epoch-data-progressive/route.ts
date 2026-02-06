@@ -181,14 +181,20 @@ async function fetchWithTVL(epoch: Epoch, baseUrl: string): Promise<ProgressiveR
 
   const { pools, protocolTotals, funderTotals } = processMONData(monData, epoch);
 
-  // Add TVL data to pools
+  // Override TVL data for Uniswap pools with The Graph data (more accurate)
   const poolsWithTVL = pools.map(pool => {
-    let poolTvl = null;
+    // Start with existing TVL from Merkl
+    let poolTvl = pool.tvl;
+
+    // Override with The Graph TVL for Uniswap pools (more accurate)
     if (pool.protocol.toLowerCase().includes('uniswap')) {
       const tokenPairMatch = pool.pool.match(/([A-Za-z0-9]+)-([A-Za-z0-9]+)/);
       if (tokenPairMatch) {
         const tokenPair = `${tokenPairMatch[1]}/${tokenPairMatch[2]}`.toUpperCase();
-        poolTvl = uniswapPoolTvl[tokenPair] || uniswapPoolTvl[`${tokenPairMatch[2]}/${tokenPairMatch[1]}`.toUpperCase()] || null;
+        const graphTvl = uniswapPoolTvl[tokenPair] || uniswapPoolTvl[`${tokenPairMatch[2]}/${tokenPairMatch[1]}`.toUpperCase()];
+        if (graphTvl) {
+          poolTvl = graphTvl;
+        }
       }
     }
     return { ...pool, tvl: poolTvl };
@@ -350,7 +356,7 @@ function processMONData(monData: any, epoch: Epoch) {
           pool: market.marketName,
           monQuantity: monQty,
           externalIncentiveUSD: extUSD,
-          tvl: null,
+          tvl: market.tvl || null,  // Use TVL from Merkl market data
           volume: null,
           monValueUSD,
           adjustedTotal: monValueUSD + extUSD,
