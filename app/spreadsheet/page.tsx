@@ -710,40 +710,42 @@ export default function SpreadsheetPage() {
           )}
         </div>
 
-        {/* Loading / Error */}
-        {loading && (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-            <p className="mt-4 text-gray-400">
-              {loadingStage === null ? 'Fetching epoch data...' : `Loading data (Stage ${loadingStage}/3)`}
-            </p>
-            {loadingStage && (
-              <div className="mt-3 max-w-md mx-auto">
-                <div className="flex justify-between text-xs text-gray-500 mb-2">
-                  <span className={loadingStage >= 1 ? 'text-green-400' : ''}>
+        {/* Loading Indicator (non-blocking) */}
+        {loading && loadingStage && (
+          <div className="mb-4 bg-gray-800 rounded-lg p-4">
+            <div className="flex items-center gap-3">
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
+              <div className="flex-1">
+                <p className="text-sm text-gray-300 mb-2">
+                  Loading data (Stage {loadingStage}/3)
+                </p>
+                <div className="flex gap-4 text-xs mb-2">
+                  <span className={loadingStage >= 1 ? 'text-green-400' : 'text-gray-500'}>
                     {loadingStage === 1 ? '⏳ ' : loadingStage > 1 ? '✓ ' : ''}MON Incentives
                   </span>
-                  <span className={loadingStage >= 2 ? 'text-green-400' : ''}>
+                  <span className={loadingStage >= 2 ? 'text-green-400' : 'text-gray-500'}>
                     {loadingStage === 2 ? '⏳ ' : loadingStage > 2 ? '✓ ' : ''}TVL Data
                   </span>
-                  <span className={loadingStage >= 3 ? 'text-green-400' : ''}>
+                  <span className={loadingStage >= 3 ? 'text-green-400' : 'text-gray-500'}>
                     {loadingStage === 3 ? '⏳ ' : ''}Volume Data
                   </span>
                 </div>
-                <div className="w-full bg-gray-700 rounded-full h-2">
+                <div className="w-full bg-gray-700 rounded-full h-1.5">
                   <div
-                    className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+                    className="bg-blue-500 h-1.5 rounded-full transition-all duration-500"
                     style={{ width: `${(loadingStage / 3) * 100}%` }}
                   ></div>
                 </div>
               </div>
-            )}
-            <p className="text-xs text-gray-500 mt-3">
-              {loadingStage === 1 && 'Fetching MON incentive allocations from Merkl...'}
-              {loadingStage === 2 && 'Adding TVL data from DefiLlama and The Graph...'}
-              {loadingStage === 3 && 'Adding volume data from Dune Analytics...'}
-              {!loadingStage && 'This may take 30-60 seconds'}
-            </p>
+            </div>
+          </div>
+        )}
+
+        {/* Initial Loading (before any data) */}
+        {loading && !loadingStage && !epochData && (
+          <div className="text-center py-12">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+            <p className="mt-4 text-gray-400">Fetching epoch data...</p>
           </div>
         )}
 

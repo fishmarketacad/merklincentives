@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getEpochByIdAsync, Epoch } from '@/lib/epochs';
 import { PoolData } from '../epoch-data/route';
 
-// Base URL helper (copied from epoch-data/route.ts)
 function getBaseUrl(request: NextRequest): string {
   const origin = request.nextUrl?.origin;
   if (origin) {
@@ -41,10 +40,8 @@ interface ProgressiveResponse {
   fetchedAt: string;
 }
 
-// Progressive loading endpoint
-// Stage 1: MON incentive data from Merkl (fast - 2-3s)
-// Stage 2: TVL data added (additional 1-2s)
-// Stage 3: Volume data added (additional 2-3s)
+// Optimized progressive loading endpoint
+// Uses parallel fetching where possible, only fetches what's needed per stage
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const epochId = searchParams.get('epoch');
@@ -66,17 +63,21 @@ export async function GET(request: NextRequest) {
   try {
     const baseUrl = getBaseUrl(request);
 
+    // All stages fetch in parallel now!
+    // Stage 1: MON only
+    // Stage 2: MON + TVL (parallel)
+    // Stage 3: MON + TVL (parallel) + Volumes (sequential, depends on MON)
+
     if (stage === 1) {
-      // Stage 1: Fetch MON incentive data only
-      const data = await fetchStage1(epoch, baseUrl);
+      const data = await fetchMONOnly(epoch, baseUrl);
       return NextResponse.json(data);
     } else if (stage === 2) {
-      // Stage 2: Fetch MON + TVL data
-      const data = await fetchStage2(epoch, baseUrl);
+      // Fetch MON and TVL in parallel
+      const data = await fetchWithTVL(epoch, baseUrl);
       return NextResponse.json(data);
     } else {
-      // Stage 3: Fetch MON + TVL + Volume data (complete)
-      const data = await fetchStage3(epoch, baseUrl);
+      // Fetch MON + TVL in parallel, then volumes
+      const data = await fetchComplete(epoch, baseUrl);
       return NextResponse.json(data);
     }
   } catch (error) {
@@ -88,11 +89,10 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// Stage 1: MON data from Merkl
-async function fetchStage1(epoch: Epoch, baseUrl: string): Promise<ProgressiveResponse> {
-  console.log('[Progressive Stage 1] Fetching MON incentives');
+// Stage 1: MON data only (fastest)
+async function fetchMONOnly(epoch: Epoch, baseUrl: string): Promise<ProgressiveResponse> {
+  console.log('[Progressive Stage 1] Fetching MON incentives only');
 
-  // Fetch incentives from Merkl
   const monResponse = await fetch(`${baseUrl}/api/query-mon-spent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -112,11 +112,201 @@ async function fetchStage1(epoch: Epoch, baseUrl: string): Promise<ProgressiveRe
   const monData = await monResponse.json();
   console.log('[Progressive Stage 1] Merkl results:', monData.results?.length || 0);
 
-  // Process pools with MON data only (no TVL/volume yet)
+  const { pools, protocolTotals, funderTotals } = processMONData(monData, epoch);
+
+  return {
+    stage: 1,
+    completed: false,
+    pools,
+    protocolTotals,
+    funderTotals,
+    epoch,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+// Stage 2: MON + TVL (parallel fetch)
+async function fetchWithTVL(epoch: Epoch, baseUrl: string): Promise<ProgressiveResponse> {
+  console.log('[Progressive Stage 2] Fetching MON + TVL in parallel');
+
+  const TVL_PROTOCOLS = [
+    'clober', 'curvance', 'gearbox', 'kuru', 'morpho', 'euler',
+    'pancake-swap', 'uniswap', 'monday-trade', 'renzo', 'upshift',
+    'townsquare', 'Beefy', 'accountable', 'curve', 'lfj', 'wlfi'
+  ];
+
+  // Fetch MON, protocol TVL, and Uniswap TVL all in parallel!
+  const [monResponse, tvlResponse, uniswapResponse] = await Promise.all([
+    fetch(`${baseUrl}/api/query-mon-spent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        protocols: ['all'],
+        startDate: epoch.startDate,
+        endDate: epoch.endDate,
+        token: 'MON'
+      }),
+      cache: 'no-store',
+    }),
+    fetch(`${baseUrl}/api/protocol-tvl`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        protocols: TVL_PROTOCOLS,
+        startDate: epoch.startDate,
+        endDate: epoch.endDate
+      }),
+      cache: 'no-store',
+    }),
+    fetch(`${baseUrl}/api/uniswap-tvl?date=${epoch.snapshotDate}`, {
+      cache: 'no-store',
+    }).catch(() => null)
+  ]);
+
+  if (!monResponse.ok) {
+    throw new Error(`Merkl API failed: ${await monResponse.text()}`);
+  }
+
+  const monData = await monResponse.json();
+  const tvlData = tvlResponse.ok ? await tvlResponse.json() : { tvlData: {}, dexVolumeData: {} };
+
+  let uniswapPoolTvl: Record<string, number> = {};
+  if (uniswapResponse && uniswapResponse.ok) {
+    const uniswapData = await uniswapResponse.json();
+    for (const [poolName, poolInfo] of Object.entries(uniswapData.pools || {})) {
+      uniswapPoolTvl[poolName] = (poolInfo as { tvlUSD: number }).tvlUSD;
+    }
+    console.log('[Progressive Stage 2] Uniswap pool TVLs:', Object.keys(uniswapPoolTvl).length);
+  }
+
+  const { pools, protocolTotals, funderTotals } = processMONData(monData, epoch);
+
+  // Add TVL data to pools
+  const poolsWithTVL = pools.map(pool => {
+    let poolTvl = null;
+    if (pool.protocol.toLowerCase().includes('uniswap')) {
+      const tokenPairMatch = pool.pool.match(/([A-Za-z0-9]+)-([A-Za-z0-9]+)/);
+      if (tokenPairMatch) {
+        const tokenPair = `${tokenPairMatch[1]}/${tokenPairMatch[2]}`.toUpperCase();
+        poolTvl = uniswapPoolTvl[tokenPair] || uniswapPoolTvl[`${tokenPairMatch[2]}/${tokenPairMatch[1]}`.toUpperCase()] || null;
+      }
+    }
+    return { ...pool, tvl: poolTvl };
+  });
+
+  // Add TVL to protocol totals
+  for (const [key, total] of Object.entries(protocolTotals)) {
+    total.tvl = tvlData.tvlData?.[key] || null;
+  }
+
+  // Add protocols with TVL but no campaigns
+  for (const protocolKey of Object.keys(tvlData.tvlData || {})) {
+    if (!protocolTotals[protocolKey] && tvlData.tvlData[protocolKey]) {
+      protocolTotals[protocolKey] = {
+        protocol: protocolKey.toUpperCase(),
+        pool: 'ALL',
+        monQuantity: 0,
+        externalIncentiveUSD: 0,
+        tvl: tvlData.tvlData[protocolKey],
+        volume: null,
+        monValueUSD: 0,
+        adjustedTotal: 0,
+      };
+    }
+  }
+
+  console.log('[Progressive Stage 2] Complete with TVL data');
+
+  return {
+    stage: 2,
+    completed: false,
+    pools: poolsWithTVL,
+    protocolTotals,
+    funderTotals,
+    epoch,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+// Stage 3: Complete (MON + TVL parallel + Volumes sequential)
+async function fetchComplete(epoch: Epoch, baseUrl: string): Promise<ProgressiveResponse> {
+  console.log('[Progressive Stage 3] Fetching complete data');
+
+  // Get Stage 2 data (MON + TVL in parallel)
+  const stage2Data = await fetchWithTVL(epoch, baseUrl);
+
+  const TVL_PROTOCOLS = [
+    'clober', 'curvance', 'gearbox', 'kuru', 'morpho', 'euler',
+    'pancake-swap', 'uniswap', 'monday-trade', 'renzo', 'upshift',
+    'townsquare', 'Beefy', 'accountable', 'curve', 'lfj', 'wlfi'
+  ];
+
+  // Fetch protocol volumes and per-market volumes in parallel
+  const [tvlResponse, marketVolumesResponse] = await Promise.all([
+    fetch(`${baseUrl}/api/protocol-tvl`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        protocols: TVL_PROTOCOLS,
+        startDate: epoch.startDate,
+        endDate: epoch.endDate
+      }),
+      cache: 'no-store',
+    }),
+    fetch(`${baseUrl}/api/protocol-tvl`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        markets: stage2Data.pools.map(p => ({
+          protocol: p.protocol,
+          marketName: p.pool
+        })),
+        startDate: epoch.startDate,
+        endDate: epoch.endDate
+      }),
+      cache: 'no-store',
+    }).catch(() => null)
+  ]);
+
+  const tvlData = tvlResponse.ok ? await tvlResponse.json() : { dexVolumeData: {} };
+  const marketVolumes = (marketVolumesResponse && marketVolumesResponse.ok)
+    ? (await marketVolumesResponse.json()).marketVolumes || {}
+    : {};
+
+  // Add volumes to pools
+  const poolsWithVolumes = stage2Data.pools.map(pool => {
+    const marketKey = `${pool.protocol.toLowerCase()}-${pool.pool}`;
+    const perMarketVol = marketVolumes[marketKey];
+    return {
+      ...pool,
+      volume: perMarketVol?.volumeInRange || perMarketVol?.volume7d || null,
+    };
+  });
+
+  // Add volumes to protocol totals
+  for (const [key, total] of Object.entries(stage2Data.protocolTotals)) {
+    total.volume = tvlData.dexVolumeData?.[key]?.volumeInRange ||
+                   tvlData.dexVolumeData?.[key]?.volume7d || null;
+  }
+
+  console.log('[Progressive Stage 3] Complete with all data');
+
+  return {
+    stage: 3,
+    completed: true,
+    pools: poolsWithVolumes,
+    protocolTotals: stage2Data.protocolTotals,
+    funderTotals: stage2Data.funderTotals,
+    epoch,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+// Helper to process MON data into pools
+function processMONData(monData: any, epoch: Epoch) {
   const pools: PoolData[] = [];
   const protocolTotals: Record<string, PoolData> = {};
   const funderTotals: Record<string, PoolData> = {};
-  const funderTvlMap: Record<string, number> = {};
 
   for (const platform of (monData.results || [])) {
     const protocolKey = normalizeProtocol(platform.platformProtocol);
@@ -148,7 +338,6 @@ async function fetchStage1(epoch: Epoch, baseUrl: string): Promise<ProgressiveRe
           monValueUSD: 0,
           adjustedTotal: 0,
         };
-        funderTvlMap[funderKey] = 0;
       }
 
       for (const market of (funding.markets || [])) {
@@ -161,8 +350,8 @@ async function fetchStage1(epoch: Epoch, baseUrl: string): Promise<ProgressiveRe
           pool: market.marketName,
           monQuantity: monQty,
           externalIncentiveUSD: extUSD,
-          tvl: null, // Stage 1: no TVL yet
-          volume: null, // Stage 1: no volume yet
+          tvl: null,
+          volume: null,
           monValueUSD,
           adjustedTotal: monValueUSD + extUSD,
         };
@@ -179,254 +368,15 @@ async function fetchStage1(epoch: Epoch, baseUrl: string): Promise<ProgressiveRe
   }
 
   // Calculate USD values
-  for (const key of Object.keys(funderTotals)) {
-    const total = funderTotals[key];
+  for (const total of Object.values(funderTotals)) {
     total.monValueUSD = total.monQuantity * epoch.monTwap;
     total.adjustedTotal = total.monValueUSD + total.externalIncentiveUSD;
   }
 
-  for (const key of Object.keys(protocolTotals)) {
-    const total = protocolTotals[key];
+  for (const total of Object.values(protocolTotals)) {
     total.monValueUSD = total.monQuantity * epoch.monTwap;
     total.adjustedTotal = total.monValueUSD + total.externalIncentiveUSD;
   }
 
-  console.log('[Progressive Stage 1] Complete. Pools:', pools.length);
-
-  return {
-    stage: 1,
-    completed: false,
-    pools,
-    protocolTotals,
-    funderTotals,
-    epoch,
-    fetchedAt: new Date().toISOString(),
-  };
-}
-
-// Stage 2: MON + TVL data
-async function fetchStage2(epoch: Epoch, baseUrl: string): Promise<ProgressiveResponse> {
-  console.log('[Progressive Stage 2] Fetching MON + TVL');
-
-  // First get Stage 1 data
-  const stage1Data = await fetchStage1(epoch, baseUrl);
-
-  // Now fetch TVL data
-  const TVL_PROTOCOLS = [
-    'clober', 'curvance', 'gearbox', 'kuru', 'morpho', 'euler',
-    'pancake-swap', 'uniswap', 'monday-trade', 'renzo', 'upshift',
-    'townsquare', 'Beefy', 'accountable', 'curve', 'lfj', 'wlfi'
-  ];
-
-  const tvlResponse = await fetch(`${baseUrl}/api/protocol-tvl`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      protocols: TVL_PROTOCOLS,
-      startDate: epoch.startDate,
-      endDate: epoch.endDate
-    }),
-    cache: 'no-store',
-  });
-
-  const tvlData = tvlResponse.ok ? await tvlResponse.json() : { tvlData: {}, dexVolumeData: {} };
-
-  // Fetch Uniswap V4 pool-level TVL
-  let uniswapPoolTvl: Record<string, number> = {};
-  try {
-    const uniswapResponse = await fetch(`${baseUrl}/api/uniswap-tvl?date=${epoch.snapshotDate}`, {
-      cache: 'no-store',
-    });
-    if (uniswapResponse.ok) {
-      const uniswapData = await uniswapResponse.json();
-      for (const [poolName, poolInfo] of Object.entries(uniswapData.pools || {})) {
-        uniswapPoolTvl[poolName] = (poolInfo as { tvlUSD: number }).tvlUSD;
-      }
-      console.log('[Progressive Stage 2] Uniswap pool TVLs:', Object.keys(uniswapPoolTvl).length);
-    }
-  } catch (e) {
-    console.log('[Progressive Stage 2] Uniswap TVL fetch error:', e);
-  }
-
-  // Update pools with TVL data
-  const updatedPools = stage1Data.pools.map(pool => {
-    const protocolKey = normalizeProtocol(pool.protocol);
-    let poolTvl = null;
-
-    // For Uniswap pools, try pool-level TVL
-    if (pool.protocol.toLowerCase().includes('uniswap')) {
-      const tokenPairMatch = pool.pool.match(/([A-Za-z0-9]+)-([A-Za-z0-9]+)/);
-      if (tokenPairMatch) {
-        const tokenPair = `${tokenPairMatch[1]}/${tokenPairMatch[2]}`.toUpperCase();
-        poolTvl = uniswapPoolTvl[tokenPair] || uniswapPoolTvl[`${tokenPairMatch[2]}/${tokenPairMatch[1]}`.toUpperCase()] || null;
-      }
-    }
-
-    return {
-      ...pool,
-      tvl: poolTvl,
-    };
-  });
-
-  // Update protocol totals with TVL
-  const updatedProtocolTotals = { ...stage1Data.protocolTotals };
-  for (const [key, total] of Object.entries(updatedProtocolTotals)) {
-    total.tvl = tvlData.tvlData?.[key] || null;
-  }
-
-  // Add protocols with TVL but no Merkl campaigns
-  const protocolsWithTVL = Object.keys(tvlData.tvlData || {});
-  for (const protocolKey of protocolsWithTVL) {
-    if (!updatedProtocolTotals[protocolKey]) {
-      const tvl = tvlData.tvlData?.[protocolKey];
-      if (tvl) {
-        updatedProtocolTotals[protocolKey] = {
-          protocol: protocolKey.toUpperCase(),
-          pool: 'ALL',
-          monQuantity: 0,
-          externalIncentiveUSD: 0,
-          tvl,
-          volume: null,
-          monValueUSD: 0,
-          adjustedTotal: 0,
-        };
-      }
-    }
-  }
-
-  // Update funder totals with aggregated TVL
-  const updatedFunderTotals = { ...stage1Data.funderTotals };
-  const funderTvlMap: Record<string, number> = {};
-  for (const pool of updatedPools) {
-    // Find which funder(s) funded this pool
-    for (const [funderKey] of Object.entries(updatedFunderTotals)) {
-      if (!funderTvlMap[funderKey]) funderTvlMap[funderKey] = 0;
-      if (pool.tvl && pool.tvl > 0) {
-        // Simple aggregation - this may need refinement based on your data structure
-        funderTvlMap[funderKey] += pool.tvl / Object.keys(updatedFunderTotals).length; // Simplified
-      }
-    }
-  }
-
-  for (const [key, total] of Object.entries(updatedFunderTotals)) {
-    total.tvl = funderTvlMap[key] > 0 ? funderTvlMap[key] : null;
-  }
-
-  console.log('[Progressive Stage 2] Complete with TVL data');
-
-  return {
-    stage: 2,
-    completed: false,
-    pools: updatedPools,
-    protocolTotals: updatedProtocolTotals,
-    funderTotals: updatedFunderTotals,
-    epoch,
-    fetchedAt: new Date().toISOString(),
-  };
-}
-
-// Stage 3: Complete data with volumes
-async function fetchStage3(epoch: Epoch, baseUrl: string): Promise<ProgressiveResponse> {
-  console.log('[Progressive Stage 3] Fetching complete data with volumes');
-
-  // Get Stage 2 data first
-  const stage2Data = await fetchStage2(epoch, baseUrl);
-
-  // Fetch protocol-level volumes
-  const TVL_PROTOCOLS = [
-    'clober', 'curvance', 'gearbox', 'kuru', 'morpho', 'euler',
-    'pancake-swap', 'uniswap', 'monday-trade', 'renzo', 'upshift',
-    'townsquare', 'Beefy', 'accountable', 'curve', 'lfj', 'wlfi'
-  ];
-
-  const tvlResponse = await fetch(`${baseUrl}/api/protocol-tvl`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      protocols: TVL_PROTOCOLS,
-      startDate: epoch.startDate,
-      endDate: epoch.endDate
-    }),
-    cache: 'no-store',
-  });
-
-  const tvlData = tvlResponse.ok ? await tvlResponse.json() : { tvlData: {}, dexVolumeData: {} };
-
-  // Fetch per-market volumes
-  const markets: { protocol: string; marketName: string }[] = stage2Data.pools.map(pool => ({
-    protocol: pool.protocol,
-    marketName: pool.pool
-  }));
-
-  let marketVolumes: Record<string, { volumeInRange?: number; volume7d?: number }> = {};
-  if (markets.length > 0) {
-    try {
-      const volResponse = await fetch(`${baseUrl}/api/protocol-tvl`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          markets,
-          startDate: epoch.startDate,
-          endDate: epoch.endDate
-        }),
-        cache: 'no-store',
-      });
-      if (volResponse.ok) {
-        const volData = await volResponse.json();
-        marketVolumes = volData.marketVolumes || {};
-        console.log('[Progressive Stage 3] Market volumes:', Object.keys(marketVolumes).length);
-      }
-    } catch (e) {
-      console.error('[Progressive Stage 3] Volume fetch error:', e);
-    }
-  }
-
-  // Update pools with volume data
-  const updatedPools = stage2Data.pools.map(pool => {
-    const marketKey = `${pool.protocol.toLowerCase()}-${pool.pool}`;
-    const perMarketVol = marketVolumes[marketKey];
-    return {
-      ...pool,
-      volume: perMarketVol?.volumeInRange || perMarketVol?.volume7d || null,
-    };
-  });
-
-  // Update protocol totals with volume
-  const updatedProtocolTotals = { ...stage2Data.protocolTotals };
-  for (const [key, total] of Object.entries(updatedProtocolTotals)) {
-    total.volume = tvlData.dexVolumeData?.[key]?.volumeInRange ||
-                   tvlData.dexVolumeData?.[key]?.volume7d || null;
-  }
-
-  // Add protocols with volume but no Merkl campaigns
-  const protocolsWithVolume = Object.keys(tvlData.dexVolumeData || {});
-  for (const protocolKey of protocolsWithVolume) {
-    if (!updatedProtocolTotals[protocolKey]) {
-      const vol = tvlData.dexVolumeData?.[protocolKey];
-      if (vol) {
-        updatedProtocolTotals[protocolKey] = {
-          protocol: protocolKey.toUpperCase(),
-          pool: 'ALL',
-          monQuantity: 0,
-          externalIncentiveUSD: 0,
-          tvl: null,
-          volume: vol?.volumeInRange || vol?.volume7d || null,
-          monValueUSD: 0,
-          adjustedTotal: 0,
-        };
-      }
-    }
-  }
-
-  console.log('[Progressive Stage 3] Complete with all data');
-
-  return {
-    stage: 3,
-    completed: true,
-    pools: updatedPools,
-    protocolTotals: updatedProtocolTotals,
-    funderTotals: stage2Data.funderTotals,
-    epoch,
-    fetchedAt: new Date().toISOString(),
-  };
+  return { pools, protocolTotals, funderTotals };
 }
