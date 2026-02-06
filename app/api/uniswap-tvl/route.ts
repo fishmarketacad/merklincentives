@@ -9,7 +9,7 @@ const TRACKED_POOLS: Record<string, { name: string; poolId: string }> = {
   'weETH-WETH': { name: 'weETH-WETH', poolId: '0x2884b37c4a144e7047a1377ba7201d4b8ea318f0240369e01dc400f04e6cac40' },
   'WETH-USDC': { name: 'WETH-USDC', poolId: '0xad408916c1c310da9c258d4c128a7bf50fd9edc42a218cc970da39cfc8a05d93' },
   'MON-USDC': { name: 'MON-USDC', poolId: '0x18a9fc874581f3ba12b7898f80a683c66fd5877fd74b26a85ba9a3a79c549954' },
-  'AUSD-USDC': { name: 'AUSD-USDC', poolId: '0xd112fde908d7342135fc7297cc53d25bf7a11d6c6e21fe7a2df8a31b96e8c959' }, // 0.0009% fee tier
+  'AUSD-USDC': { name: 'AUSD-USDC', poolId: '0xd112fde908d7342135fc7297cc53d25bf7a11d6c6e21fe7ac3e73c40f70827e8' }, // 0.0009% fee tier
   'AUSD-USDT0': { name: 'AUSD-USDT0', poolId: '0xe56868928b91fcd5ebeada3d0ec8767f2bbfeb1e7da181203d13f6af76b03bf9' },
   'AUSD-XAUt0': { name: 'AUSD-XAUt0', poolId: '0xe1a8600687e4d06ca4787e5d0ccdacb1d360bfc9ca6ca2a49a688e14d0ef37b4' },
   'WBTC-USDC': { name: 'WBTC-USDC', poolId: '0xd77c0f253764f5d5fbc78e13888afcc35c839262e6b21cd02baa9d8551a9898a' },
