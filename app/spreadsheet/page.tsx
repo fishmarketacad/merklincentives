@@ -292,6 +292,7 @@ export default function SpreadsheetPage() {
     // Check cache first (unless force refresh)
     if (!forceRefresh && epochCache[epochId]) {
       console.log(`[Cache] Using cached data for epoch ${epochId}`);
+      console.log('[Client] Using cached data for epoch:', epochId, 'Has volume:', epochCache[epochId].pools?.some((p: any) => p.volume !== null));
       setEpochData(epochCache[epochId]);
       return;
     }
@@ -336,12 +337,15 @@ export default function SpreadsheetPage() {
 
         // Stage 3: Add volume data
         setLoadingStage(3);
+        console.log('[Client] Fetching Stage 3 (volumes)...');
         const stage3Response = await fetch(`/api/epoch-data-progressive?epoch=${epochId}&stage=3`);
         if (!stage3Response.ok) {
           const errData = await stage3Response.json();
           throw new Error(errData.details || errData.error || 'Stage 3 failed');
         }
         const stage3Data = await stage3Response.json();
+        console.log('[Client] Stage 3 complete. Warnings:', stage3Data.warnings);
+        console.log('[Client] Sample pool volumes:', stage3Data.pools?.slice(0, 5).map((p: any) => ({ pool: p.pool, volume: p.volume })));
         setEpochData(stage3Data);
 
         // Cache the complete data
