@@ -363,6 +363,7 @@ async function fetchDuneVolume(
 
     // Filter rows by token pair (matching logic already handles both directions)
     const filteredRows = filterRowsByTokenPair(allRows, tokenPair || null);
+    console.log(`[Dune] Query ${queryId}: ${allRows.length} total rows, ${filteredRows.length} filtered for pair "${tokenPair}", date range ${new Date(startTimestamp * 1000).toISOString().split('T')[0]} to ${new Date(endTimestamp * 1000).toISOString().split('T')[0]}`);
 
     // Sum volumes for the date range
     let volumeInRange = 0;
