@@ -1,7 +1,13 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { EPOCHS, Epoch, getEpochLabel } from '@/lib/epochs';
+import { EPOCHS, Epoch, getAllWeeksAsync, Week } from '@/lib/epochs';
+
+// Helper to format dates as MM/DD
+function formatDisplayDate(dateStr: string): string {
+  const [, month, day] = dateStr.split('-');
+  return `${month}/${day}`;
+}
 
 // Custom tooltip component with instant hover - shows below the element
 function Tooltip({ children, text }: { children: React.ReactNode; text: string }) {
@@ -123,10 +129,68 @@ interface ProtocolGroup {
 }
 
 export default function SpreadsheetPage() {
-  const [selectedEpochId, setSelectedEpochId] = useState<string>(EPOCHS[0].id);
+  // Load all weeks (including dynamic epochs from Redis)
+  const [allWeeks, setAllWeeks] = useState<Week[]>([]);
+  const [weeksLoading, setWeeksLoading] = useState(true);
+
+  // Load weeks on mount
+  useEffect(() => {
+    const loadWeeks = async () => {
+      setWeeksLoading(true);
+      try {
+        const weeks = await getAllWeeksAsync();
+        setAllWeeks(weeks);
+      } catch (error) {
+        console.error('Failed to load weeks:', error);
+        // Fallback to EPOCHS if dynamic fetch fails
+        const fallbackWeeks: Week[] = [];
+        for (const epoch of EPOCHS) {
+          const start = new Date(epoch.startDate + 'T00:00:00Z');
+          const end = new Date(epoch.endDate + 'T00:00:00Z');
+          const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+          fallbackWeeks.push({
+            id: `${epoch.id}-w1`,
+            name: epoch.name,
+            startDate: epoch.startDate,
+            endDate: epoch.endDate,
+            epochId: epoch.id,
+            epoch: epoch,
+          });
+        }
+        setAllWeeks(fallbackWeeks);
+      } finally {
+        setWeeksLoading(false);
+      }
+    };
+    loadWeeks();
+  }, []);
+
+  // Find the current week (or most recent week if today is not in any week)
+  const getCurrentWeekId = () => {
+    if (allWeeks.length === 0) return EPOCHS[0]?.id || '5-w1';
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Try to find a week that contains today
+    for (const week of allWeeks) {
+      const weekStart = new Date(week.startDate + 'T00:00:00Z');
+      const weekEnd = new Date(week.endDate + 'T00:00:00Z');
+
+      if (today >= weekStart && today < weekEnd) {
+        return week.id;
+      }
+    }
+
+    // If no week contains today, return the most recent week (first in list)
+    return allWeeks[0]?.id || EPOCHS[0].id;
+  };
+
+  const [selectedWeekId, setSelectedWeekId] = useState<string>('');
   const [epochData, setEpochData] = useState<EpochData | null>(null);
   const [prevEpochData, setPrevEpochData] = useState<EpochData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState<1 | 2 | 3 | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'protocols' | 'pools' | 'funders'>('protocols');
   const [showDebug, setShowDebug] = useState(false);
@@ -139,37 +203,82 @@ export default function SpreadsheetPage() {
   // Collapsible protocol groups
   const [expandedProtocols, setExpandedProtocols] = useState<Set<string>>(new Set());
 
-  const selectedEpoch = EPOCHS.find(e => e.id === selectedEpochId);
+  // Initialize selectedWeekId on mount
+  useEffect(() => {
+    if (allWeeks.length > 0 && !selectedWeekId) {
+      setSelectedWeekId(getCurrentWeekId());
+    }
+  }, [allWeeks]);
 
-  // Find previous epoch (EPOCHS is ordered newest to oldest)
-  const selectedEpochIndex = EPOCHS.findIndex(e => e.id === selectedEpochId);
-  const prevEpoch = selectedEpochIndex < EPOCHS.length - 1 ? EPOCHS[selectedEpochIndex + 1] : null;
+  // Find selected week and its epoch
+  const selectedWeek = allWeeks.find(w => w.id === selectedWeekId);
+  const selectedEpoch = selectedWeek?.epoch;
+
+  // Find previous week for comparison
+  const selectedWeekIndex = allWeeks.findIndex(w => w.id === selectedWeekId);
+  const prevWeek = selectedWeekIndex < allWeeks.length - 1 ? allWeeks[selectedWeekIndex + 1] : null;
+  const prevEpoch = prevWeek?.epoch;
 
   // Use custom TWAP or epoch default
   const effectiveMonTwap = customMonTwap ?? selectedEpoch?.monTwap ?? 0;
 
   useEffect(() => {
-    fetchEpochData(selectedEpochId, false);
-    setCustomMonTwap(null); // Reset custom TWAP when epoch changes
-  }, [selectedEpochId]);
+    if (selectedEpoch) {
+      fetchEpochData(selectedEpoch.id, false);
+      setCustomMonTwap(null); // Reset custom TWAP when week changes
+    }
+  }, [selectedWeekId, selectedEpoch]);
 
   const fetchEpochData = async (epochId: string, forceRefresh: boolean) => {
     setLoading(true);
     setError(null);
-    try {
-      // Fetch current epoch
-      const url = forceRefresh
-        ? `/api/epoch-data?epoch=${epochId}&refresh=true`
-        : `/api/epoch-data?epoch=${epochId}`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.details || errData.error || `Failed to fetch: ${response.statusText}`);
-      }
-      const data = await response.json();
-      setEpochData(data);
+    setLoadingStage(null);
 
-      // Fetch previous epoch (for comparison)
+    try {
+      // If force refresh, use the full endpoint (not progressive)
+      if (forceRefresh) {
+        const url = `/api/epoch-data?epoch=${epochId}&refresh=true`;
+        const response = await fetch(url);
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.details || errData.error || `Failed to fetch: ${response.statusText}`);
+        }
+        const data = await response.json();
+        setEpochData(data);
+      } else {
+        // Progressive loading: fetch in 3 stages
+        // Stage 1: MON incentive data
+        setLoadingStage(1);
+        const stage1Response = await fetch(`/api/epoch-data-progressive?epoch=${epochId}&stage=1`);
+        if (!stage1Response.ok) {
+          const errData = await stage1Response.json();
+          throw new Error(errData.details || errData.error || 'Stage 1 failed');
+        }
+        const stage1Data = await stage1Response.json();
+        setEpochData(stage1Data);
+
+        // Stage 2: Add TVL data
+        setLoadingStage(2);
+        const stage2Response = await fetch(`/api/epoch-data-progressive?epoch=${epochId}&stage=2`);
+        if (!stage2Response.ok) {
+          const errData = await stage2Response.json();
+          throw new Error(errData.details || errData.error || 'Stage 2 failed');
+        }
+        const stage2Data = await stage2Response.json();
+        setEpochData(stage2Data);
+
+        // Stage 3: Add volume data
+        setLoadingStage(3);
+        const stage3Response = await fetch(`/api/epoch-data-progressive?epoch=${epochId}&stage=3`);
+        if (!stage3Response.ok) {
+          const errData = await stage3Response.json();
+          throw new Error(errData.details || errData.error || 'Stage 3 failed');
+        }
+        const stage3Data = await stage3Response.json();
+        setEpochData(stage3Data);
+      }
+
+      // Fetch previous epoch (for comparison) - use full endpoint
       const epochIndex = EPOCHS.findIndex(e => e.id === epochId);
       const previousEpoch = epochIndex < EPOCHS.length - 1 ? EPOCHS[epochIndex + 1] : null;
       if (previousEpoch) {
@@ -192,23 +301,24 @@ export default function SpreadsheetPage() {
       setError(String(e));
     } finally {
       setLoading(false);
+      setLoadingStage(null);
     }
   };
 
-  // Calculate epoch duration in days
+  // Calculate week duration in days (should always be 7 for weeks)
   const epochDays = useMemo(() => {
-    if (!selectedEpoch) return 7; // default to 7 days
-    const start = new Date(selectedEpoch.startDate);
-    const end = new Date(selectedEpoch.endDate);
+    if (!selectedWeek) return 7; // default to 7 days
+    const start = new Date(selectedWeek.startDate);
+    const end = new Date(selectedWeek.endDate);
     const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
     return days > 0 ? days : 7;
-  }, [selectedEpoch]);
+  }, [selectedWeek]);
 
   // Recalculate values with custom TWAP
   const recalculatedData = useMemo(() => {
     if (!epochData) return null;
 
-    const recalcPool = (pool: PoolData): PoolData => {
+    const recalcPool = (pool: PoolData, debug = false): PoolData => {
       const monValueUSD = pool.monQuantity * effectiveMonTwap;
       const adjustedTotal = monValueUSD + pool.externalIncentiveUSD;
       // TVL Cost = (MON Value / epoch_days * 365) / TVL * 100 (annualized)
@@ -220,6 +330,23 @@ export default function SpreadsheetPage() {
         ? ((adjustedTotal / epochDays * 365) / pool.tvl) * 100
         : null;
 
+      // Debug logging for TVL Cost calculation
+      if (debug && pool.pool === 'ALL') {
+        console.log(`[TVL Cost Debug] ${pool.protocol}:`, {
+          monQuantity: pool.monQuantity,
+          effectiveMonTwap,
+          monValueUSD,
+          externalIncentiveUSD: pool.externalIncentiveUSD,
+          adjustedTotal,
+          tvl: pool.tvl,
+          epochDays,
+          annualizedMON: monValueUSD / epochDays * 365,
+          tvlCost,
+          adjustedTvlCost,
+          formula: `(${monValueUSD.toFixed(2)} / ${epochDays} * 365) / ${pool.tvl} * 100 = ${tvlCost?.toFixed(4)}%`
+        });
+      }
+
       return {
         ...pool,
         monValueUSD,
@@ -229,29 +356,41 @@ export default function SpreadsheetPage() {
       };
     };
 
-    const pools = epochData.pools.map(recalcPool);
+    // Debug: log first few pools to check TVL values
+    const uniswapPools = epochData.pools.filter(p => p.protocol.toLowerCase().includes('uniswap'));
+    if (uniswapPools.length > 0) {
+      console.log('[Pool TVL Debug] First 3 Uniswap pools from API:', uniswapPools.slice(0, 3).map(p => ({
+        pool: p.pool,
+        monQuantity: p.monQuantity,
+        tvl: p.tvl,
+        hasPoolTvl: p.tvl !== null && p.tvl !== undefined
+      })));
+    }
+
+    const pools = epochData.pools.map(p => recalcPool(p, false));
     const protocolTotals: Record<string, PoolData> = {};
     const funderTotals: Record<string, PoolData> = {};
 
+    console.log('[TVL Cost Debug] epochDays:', epochDays, 'effectiveMonTwap:', effectiveMonTwap);
     for (const [key, total] of Object.entries(epochData.protocolTotals)) {
-      protocolTotals[key] = recalcPool(total);
+      protocolTotals[key] = recalcPool(total, true); // Enable debug for protocol totals
     }
 
     for (const [key, total] of Object.entries(epochData.funderTotals || {})) {
-      funderTotals[key] = recalcPool(total);
+      funderTotals[key] = recalcPool(total, false);
     }
 
     return { ...epochData, pools, protocolTotals, funderTotals };
   }, [epochData, effectiveMonTwap, epochDays]);
 
-  // Calculate previous epoch duration
+  // Calculate previous week duration
   const prevEpochDays = useMemo(() => {
-    if (!prevEpoch) return 7;
-    const start = new Date(prevEpoch.startDate);
-    const end = new Date(prevEpoch.endDate);
+    if (!prevWeek) return 7;
+    const start = new Date(prevWeek.startDate);
+    const end = new Date(prevWeek.endDate);
     const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
     return days > 0 ? days : 7;
-  }, [prevEpoch]);
+  }, [prevWeek]);
 
   // Recalculate previous epoch values (using its own TWAP)
   const recalculatedPrevData = useMemo(() => {
@@ -293,14 +432,15 @@ export default function SpreadsheetPage() {
   }, [prevEpochData, prevEpoch, prevEpochDays]);
 
   // Group pools by protocol for collapsible view
-  const protocolGroups = useMemo((): ProtocolGroup[] => {
+  const protocolGroups = useMemo((): (ProtocolGroup & { key: string })[] => {
     if (!recalculatedData) return [];
 
-    const groups: Record<string, ProtocolGroup> = {};
+    const groups: Record<string, ProtocolGroup & { key: string }> = {};
 
     // First, create groups from protocol totals
     for (const [key, total] of Object.entries(recalculatedData.protocolTotals)) {
       groups[key] = {
+        key, // Store the original key to avoid duplicate key issues
         protocol: total.protocol,
         total,
         pools: [],
@@ -361,41 +501,77 @@ export default function SpreadsheetPage() {
   const copyToClipboard = () => {
     if (!recalculatedData) return;
 
-    const rows = viewMode === 'protocols'
-      ? Object.values(recalculatedData.protocolTotals)
-      : viewMode === 'funders'
-      ? Object.values(recalculatedData.funderTotals)
-      : recalculatedData.pools;
-
     const header = 'Protocol\tPool\tMON Quantity\tMON Value USD\tExternal USD\tAdjusted Total\tTVL\tTVL Cost %\tAdj TVL Cost %\tVolume';
-    const dataRows = rows.map(row =>
-      `${row.protocol}\t${row.pool}\t${row.monQuantity}\t${row.monValueUSD}\t${row.externalIncentiveUSD}\t${row.adjustedTotal}\t${row.tvl || ''}\t${row.tvlCost?.toFixed(4) || ''}\t${row.adjustedTvlCost?.toFixed(4) || ''}\t${row.volume || ''}`
-    ).join('\n');
+    let dataRows: string[] = [];
 
-    navigator.clipboard.writeText(`${header}\n${dataRows}`);
+    if (viewMode === 'protocols') {
+      // Include protocol totals AND sub-rows
+      for (const group of protocolGroups) {
+        // Add protocol total row
+        const total = group.total;
+        dataRows.push(
+          `${total.protocol}\t${total.pool}\t${total.monQuantity}\t${total.monValueUSD}\t${total.externalIncentiveUSD}\t${total.adjustedTotal}\t${total.tvl || ''}\t${total.tvlCost?.toFixed(4) || ''}\t${total.adjustedTvlCost?.toFixed(4) || ''}\t${total.volume || ''}`
+        );
+        // Add sub-rows (individual pools)
+        for (const pool of group.pools) {
+          dataRows.push(
+            `  ${pool.protocol}\t${pool.pool}\t${pool.monQuantity}\t${pool.monValueUSD}\t${pool.externalIncentiveUSD}\t${pool.adjustedTotal}\t${pool.tvl || ''}\t${pool.tvlCost?.toFixed(4) || ''}\t${pool.adjustedTvlCost?.toFixed(4) || ''}\t${pool.volume || ''}`
+          );
+        }
+      }
+    } else {
+      // For funders and all pools view, use simple row mapping
+      const rows = viewMode === 'funders'
+        ? Object.values(recalculatedData.funderTotals)
+        : recalculatedData.pools;
+
+      dataRows = rows.map(row =>
+        `${row.protocol}\t${row.pool}\t${row.monQuantity}\t${row.monValueUSD}\t${row.externalIncentiveUSD}\t${row.adjustedTotal}\t${row.tvl || ''}\t${row.tvlCost?.toFixed(4) || ''}\t${row.adjustedTvlCost?.toFixed(4) || ''}\t${row.volume || ''}`
+      );
+    }
+
+    navigator.clipboard.writeText(`${header}\n${dataRows.join('\n')}`);
     alert('Copied to clipboard! Paste into Google Sheets.');
   };
 
   const downloadCSV = () => {
     if (!recalculatedData) return;
 
-    const rows = viewMode === 'protocols'
-      ? Object.values(recalculatedData.protocolTotals)
-      : viewMode === 'funders'
-      ? Object.values(recalculatedData.funderTotals)
-      : recalculatedData.pools;
-
     const header = 'Protocol,Pool,MON Quantity,MON Value USD,External USD,Adjusted Total,TVL,TVL Cost %,Adj TVL Cost %,Volume';
-    const dataRows = rows.map(row =>
-      `"${row.protocol}","${row.pool}",${row.monQuantity},${row.monValueUSD},${row.externalIncentiveUSD},${row.adjustedTotal},${row.tvl || ''},${row.tvlCost?.toFixed(4) || ''},${row.adjustedTvlCost?.toFixed(4) || ''},${row.volume || ''}`
-    ).join('\n');
+    let dataRows: string[] = [];
 
-    const csv = `${header}\n${dataRows}`;
+    if (viewMode === 'protocols') {
+      // Include protocol totals AND sub-rows
+      for (const group of protocolGroups) {
+        // Add protocol total row
+        const total = group.total;
+        dataRows.push(
+          `"${total.protocol}","${total.pool}",${total.monQuantity},${total.monValueUSD},${total.externalIncentiveUSD},${total.adjustedTotal},${total.tvl || ''},${total.tvlCost?.toFixed(4) || ''},${total.adjustedTvlCost?.toFixed(4) || ''},${total.volume || ''}`
+        );
+        // Add sub-rows (individual pools)
+        for (const pool of group.pools) {
+          dataRows.push(
+            `"  ${pool.protocol}","${pool.pool}",${pool.monQuantity},${pool.monValueUSD},${pool.externalIncentiveUSD},${pool.adjustedTotal},${pool.tvl || ''},${pool.tvlCost?.toFixed(4) || ''},${pool.adjustedTvlCost?.toFixed(4) || ''},${pool.volume || ''}`
+          );
+        }
+      }
+    } else {
+      // For funders and all pools view, use simple row mapping
+      const rows = viewMode === 'funders'
+        ? Object.values(recalculatedData.funderTotals)
+        : recalculatedData.pools;
+
+      dataRows = rows.map(row =>
+        `"${row.protocol}","${row.pool}",${row.monQuantity},${row.monValueUSD},${row.externalIncentiveUSD},${row.adjustedTotal},${row.tvl || ''},${row.tvlCost?.toFixed(4) || ''},${row.adjustedTvlCost?.toFixed(4) || ''},${row.volume || ''}`
+      );
+    }
+
+    const csv = `${header}\n${dataRows.join('\n')}`;
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `merkl-epoch-${selectedEpochId}-${viewMode}.csv`;
+    a.download = `merkl-${selectedWeekId}-${viewMode}.csv`;
     a.click();
   };
 
@@ -413,21 +589,28 @@ export default function SpreadsheetPage() {
           </a>
         </div>
 
-        {/* Epoch Selector */}
+        {/* Week Selector */}
         <div className="bg-gray-800 rounded-lg p-4 mb-6">
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex-1 min-w-[300px]">
-              <label className="block text-sm text-gray-400 mb-1">Select Epoch</label>
+              <label className="block text-sm text-gray-400 mb-1">Select Week</label>
               <select
-                value={selectedEpochId}
-                onChange={(e) => setSelectedEpochId(e.target.value)}
+                value={selectedWeekId}
+                onChange={(e) => setSelectedWeekId(e.target.value)}
                 className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white"
               >
-                {EPOCHS.map(epoch => (
-                  <option key={epoch.id} value={epoch.id}>
-                    {getEpochLabel(epoch)}
-                  </option>
-                ))}
+                {allWeeks.map(week => {
+                  const start = formatDisplayDate(week.startDate);
+                  const end = formatDisplayDate(week.endDate);
+                  const twapStr = week.epoch.monTwap > 0
+                    ? `$${week.epoch.monTwap.toFixed(5)}${week.epoch.monTwapChange ? ` (${week.epoch.monTwapChange})` : ''}`
+                    : '';
+                  return (
+                    <option key={week.id} value={week.id}>
+                      {week.name} - {start} to {end}{twapStr ? ` - MON Price ${twapStr}` : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -462,8 +645,8 @@ export default function SpreadsheetPage() {
               <label className="block text-sm text-gray-400 mb-1">Actions</label>
               <div className="flex gap-2">
                 <button
-                  onClick={() => fetchEpochData(selectedEpochId, true)}
-                  disabled={loading}
+                  onClick={() => selectedEpoch && fetchEpochData(selectedEpoch.id, true)}
+                  disabled={loading || !selectedEpoch}
                   className="px-4 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-600 rounded"
                 >
                   {loading ? 'Loading...' : 'Refresh'}
@@ -486,19 +669,19 @@ export default function SpreadsheetPage() {
             </div>
           </div>
 
-          {/* Epoch Info with Editable TWAP */}
-          {selectedEpoch && (
+          {/* Week Info with Editable TWAP */}
+          {selectedWeek && selectedEpoch && (
             <div className="mt-4 pt-4 border-t border-gray-700 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
-                <span className="text-gray-400">Period:</span>{' '}
-                <span className="font-mono">{selectedEpoch.startDate} to {selectedEpoch.endDate}</span>
+                <span className="text-gray-400">Week Period:</span>{' '}
+                <span className="font-mono">{selectedWeek.startDate} to {selectedWeek.endDate}</span>
               </div>
               <div>
-                <span className="text-gray-400">Snapshot:</span>{' '}
+                <span className="text-gray-400">Epoch Snapshot:</span>{' '}
                 <span className="font-mono">{selectedEpoch.snapshotDate}</span>
               </div>
               <div>
-                <span className="text-gray-400">MON TWAP:</span>{' '}
+                <span className="text-gray-400">MON Price:</span>{' '}
                 {editingTwap ? (
                   <span className="inline-flex items-center gap-1">
                     <input
@@ -531,8 +714,36 @@ export default function SpreadsheetPage() {
         {loading && (
           <div className="text-center py-12">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-            <p className="mt-4 text-gray-400">Fetching epoch data from Merkl API...</p>
-            <p className="text-xs text-gray-500 mt-2">This may take 30-60 seconds</p>
+            <p className="mt-4 text-gray-400">
+              {loadingStage === null ? 'Fetching epoch data...' : `Loading data (Stage ${loadingStage}/3)`}
+            </p>
+            {loadingStage && (
+              <div className="mt-3 max-w-md mx-auto">
+                <div className="flex justify-between text-xs text-gray-500 mb-2">
+                  <span className={loadingStage >= 1 ? 'text-green-400' : ''}>
+                    {loadingStage === 1 ? '⏳ ' : loadingStage > 1 ? '✓ ' : ''}MON Incentives
+                  </span>
+                  <span className={loadingStage >= 2 ? 'text-green-400' : ''}>
+                    {loadingStage === 2 ? '⏳ ' : loadingStage > 2 ? '✓ ' : ''}TVL Data
+                  </span>
+                  <span className={loadingStage >= 3 ? 'text-green-400' : ''}>
+                    {loadingStage === 3 ? '⏳ ' : ''}Volume Data
+                  </span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-2">
+                  <div
+                    className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+                    style={{ width: `${(loadingStage / 3) * 100}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
+            <p className="text-xs text-gray-500 mt-3">
+              {loadingStage === 1 && 'Fetching MON incentive allocations from Merkl...'}
+              {loadingStage === 2 && 'Adding TVL data from DefiLlama and The Graph...'}
+              {loadingStage === 3 && 'Adding volume data from Dune Analytics...'}
+              {!loadingStage && 'This may take 30-60 seconds'}
+            </p>
           </div>
         )}
 
@@ -541,8 +752,9 @@ export default function SpreadsheetPage() {
             <p className="text-red-400 font-bold">Error</p>
             <p className="text-red-300 text-sm mt-1">{error}</p>
             <button
-              onClick={() => fetchEpochData(selectedEpochId, true)}
-              className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-sm"
+              onClick={() => selectedEpoch && fetchEpochData(selectedEpoch.id, true)}
+              disabled={!selectedEpoch}
+              className="mt-3 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-800 rounded text-sm"
             >
               Retry
             </button>
@@ -599,12 +811,12 @@ export default function SpreadsheetPage() {
                     <th className="px-4 py-3 text-left"><Tooltip text="Protocol name from Merkl campaigns">Protocol</Tooltip></th>
                     <th className="px-4 py-3 text-left"><Tooltip text="Pool/market name or 'ALL' for protocol totals">Pool</Tooltip></th>
                     <th className="px-4 py-3 text-right"><Tooltip text="Raw MON token quantity from Merkl">MON Qty</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="MON Qty × MON TWAP Price">USD Value</Tooltip></th>
+                    <th className="px-4 py-3 text-right"><Tooltip text="MON Qty × MON Price">USD Value</Tooltip></th>
                     <th className="px-4 py-3 text-right"><Tooltip text="Non-MON incentives (AUSD, etc.) in USD">External</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="MON Value + External">Total Incentive</Tooltip></th>
+                    <th className="px-4 py-3 text-right"><Tooltip text="MON Incentives + External">Total Incentive</Tooltip></th>
                     <th className="px-4 py-3 text-right"><Tooltip text="Total Value Locked (DeFiLlama/The Graph)">TVL</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="(MON Value ÷ days × 365 ÷ TVL) × 100">TVL Cost</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="(Adj Total ÷ days × 365 ÷ TVL) × 100">Total TVL Cost</Tooltip></th>
+                    <th className="px-4 py-3 text-right"><Tooltip text="(MON Incentives ÷ days × 365 ÷ TVL) × 100">TVL Cost</Tooltip></th>
+                    <th className="px-4 py-3 text-right"><Tooltip text="(Total Incentives ÷ days × 365 ÷ TVL) × 100">Total TVL Cost</Tooltip></th>
                     <th className="px-4 py-3 text-right"><Tooltip text="Trading volume (Dune Analytics)">Volume</Tooltip></th>
                   </tr>
                 </thead>
@@ -612,15 +824,14 @@ export default function SpreadsheetPage() {
                   {viewMode === 'protocols' ? (
                     // Grouped view with collapsible protocols
                     protocolGroups.map((group) => {
-                      const key = normalizeProtocol(group.protocol);
                       const hasMultiplePools = group.pools.length > 1;
 
                       return (
-                        <React.Fragment key={key}>
+                        <React.Fragment key={group.key}>
                           {/* Protocol total row */}
                           <tr
                             className={`border-t border-gray-700 ${hasMultiplePools ? 'cursor-pointer hover:bg-gray-700' : 'hover:bg-gray-750'} bg-gray-800`}
-                            onClick={() => hasMultiplePools && toggleProtocol(key)}
+                            onClick={() => hasMultiplePools && toggleProtocol(group.key)}
                           >
                             <td className="px-4 py-3 text-gray-500">
                               {hasMultiplePools && (
@@ -639,29 +850,29 @@ export default function SpreadsheetPage() {
                             </td>
                             <td className="px-4 py-3 text-gray-400">ALL</td>
                             {(() => {
-                              const prevTotal = recalculatedPrevData?.protocolTotals[key];
+                              const prevTotal = recalculatedPrevData?.protocolTotals[group.key];
                               return (
                                 <>
                                   <td className="px-4 py-3 text-right font-mono">
                                     <ValueWithPrev current={group.total.monQuantity} prev={prevTotal?.monQuantity} />
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
-                                    <ValueWithPrev current={group.total.monValueUSD} prev={prevTotal?.monValueUSD} format="currency" colorClass="text-yellow-400" />
+                                    <ValueWithPrev current={group.total.monValueUSD} prev={prevTotal?.monValueUSD} format="currency" />
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
-                                    <ValueWithPrev current={group.total.externalIncentiveUSD} prev={prevTotal?.externalIncentiveUSD} format="currency" colorClass="text-blue-400" />
+                                    <ValueWithPrev current={group.total.externalIncentiveUSD} prev={prevTotal?.externalIncentiveUSD} format="currency" />
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
-                                    <ValueWithPrev current={group.total.adjustedTotal} prev={prevTotal?.adjustedTotal} format="currency" colorClass="text-green-400" />
+                                    <ValueWithPrev current={group.total.adjustedTotal} prev={prevTotal?.adjustedTotal} format="currency" />
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
                                     <ValueWithPrev current={group.total.tvl} prev={prevTotal?.tvl} format="large" />
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
-                                    <ValueWithPrev current={group.total.tvlCost} prev={prevTotal?.tvlCost} format="percent" colorClass="text-orange-400" invertColor />
+                                    <ValueWithPrev current={group.total.tvlCost} prev={prevTotal?.tvlCost} format="percent" invertColor />
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
-                                    <ValueWithPrev current={group.total.adjustedTvlCost} prev={prevTotal?.adjustedTvlCost} format="percent" colorClass="text-pink-400" invertColor />
+                                    <ValueWithPrev current={group.total.adjustedTvlCost} prev={prevTotal?.adjustedTvlCost} format="percent" invertColor />
                                   </td>
                                   <td className="px-4 py-3 text-right font-mono">
                                     <ValueWithPrev current={group.total.volume} prev={prevTotal?.volume} format="large" />
@@ -674,7 +885,7 @@ export default function SpreadsheetPage() {
                           {/* Individual pool rows (when expanded) */}
                           {group.isExpanded && group.pools.map((pool, idx) => (
                             <tr
-                              key={`${key}-${pool.pool}-${idx}`}
+                              key={`${group.key}-${pool.pool}-${idx}`}
                               className="border-t border-gray-700/50 bg-gray-850 hover:bg-gray-800"
                             >
                               <td className="px-4 py-2"></td>
@@ -683,22 +894,22 @@ export default function SpreadsheetPage() {
                               <td className="px-4 py-2 text-right font-mono text-xs">
                                 {pool.monQuantity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                               </td>
-                              <td className="px-4 py-2 text-right font-mono text-yellow-400/70 text-xs">
+                              <td className="px-4 py-2 text-right font-mono text-xs">
                                 ${pool.monValueUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                               </td>
-                              <td className="px-4 py-2 text-right font-mono text-blue-400/70 text-xs">
+                              <td className="px-4 py-2 text-right font-mono text-xs">
                                 ${pool.externalIncentiveUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                               </td>
-                              <td className="px-4 py-2 text-right font-mono text-green-400/70 text-xs">
+                              <td className="px-4 py-2 text-right font-mono text-xs">
                                 ${pool.adjustedTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                               </td>
                               <td className="px-4 py-2 text-right font-mono text-xs">
                                 {pool.tvl ? `$${formatLargeNumber(pool.tvl)}` : '-'}
                               </td>
-                              <td className="px-4 py-2 text-right font-mono text-orange-400/70 text-xs">
+                              <td className="px-4 py-2 text-right font-mono text-xs">
                                 {pool.tvlCost ? `${pool.tvlCost.toFixed(2)}%` : '-'}
                               </td>
-                              <td className="px-4 py-2 text-right font-mono text-pink-400/70 text-xs">
+                              <td className="px-4 py-2 text-right font-mono text-xs">
                                 {pool.adjustedTvlCost ? `${pool.adjustedTvlCost.toFixed(2)}%` : '-'}
                               </td>
                               <td className="px-4 py-2 text-right font-mono text-xs">
@@ -727,22 +938,22 @@ export default function SpreadsheetPage() {
                             <ValueWithPrev current={row.monQuantity} prev={prevFunder?.monQuantity} />
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
-                            <ValueWithPrev current={row.monValueUSD} prev={prevFunder?.monValueUSD} format="currency" colorClass="text-yellow-400" />
+                            <ValueWithPrev current={row.monValueUSD} prev={prevFunder?.monValueUSD} format="currency" />
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
-                            <ValueWithPrev current={row.externalIncentiveUSD} prev={prevFunder?.externalIncentiveUSD} format="currency" colorClass="text-blue-400" />
+                            <ValueWithPrev current={row.externalIncentiveUSD} prev={prevFunder?.externalIncentiveUSD} format="currency" />
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
-                            <ValueWithPrev current={row.adjustedTotal} prev={prevFunder?.adjustedTotal} format="currency" colorClass="text-green-400" />
+                            <ValueWithPrev current={row.adjustedTotal} prev={prevFunder?.adjustedTotal} format="currency" />
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
                             <ValueWithPrev current={row.tvl} prev={prevFunder?.tvl} format="large" />
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
-                            <ValueWithPrev current={row.tvlCost} prev={prevFunder?.tvlCost} format="percent" colorClass="text-orange-400" invertColor />
+                            <ValueWithPrev current={row.tvlCost} prev={prevFunder?.tvlCost} format="percent" invertColor />
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
-                            <ValueWithPrev current={row.adjustedTvlCost} prev={prevFunder?.adjustedTvlCost} format="percent" colorClass="text-pink-400" invertColor />
+                            <ValueWithPrev current={row.adjustedTvlCost} prev={prevFunder?.adjustedTvlCost} format="percent" invertColor />
                           </td>
                           <td className="px-4 py-3 text-right font-mono">
                             <ValueWithPrev current={row.volume} prev={prevFunder?.volume} format="large" />
@@ -760,22 +971,22 @@ export default function SpreadsheetPage() {
                         <td className="px-4 py-3 text-right font-mono">
                           {row.monQuantity.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </td>
-                        <td className="px-4 py-3 text-right font-mono text-yellow-400">
+                        <td className="px-4 py-3 text-right font-mono">
                           ${row.monValueUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </td>
-                        <td className="px-4 py-3 text-right font-mono text-blue-400">
+                        <td className="px-4 py-3 text-right font-mono">
                           ${row.externalIncentiveUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </td>
-                        <td className="px-4 py-3 text-right font-mono text-green-400">
+                        <td className="px-4 py-3 text-right font-mono">
                           ${row.adjustedTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </td>
                         <td className="px-4 py-3 text-right font-mono">
                           {row.tvl ? `$${formatLargeNumber(row.tvl)}` : '-'}
                         </td>
-                        <td className="px-4 py-3 text-right font-mono text-orange-400">
+                        <td className="px-4 py-3 text-right font-mono">
                           {row.tvlCost ? `${row.tvlCost.toFixed(2)}%` : '-'}
                         </td>
-                        <td className="px-4 py-3 text-right font-mono text-pink-400">
+                        <td className="px-4 py-3 text-right font-mono">
                           {row.adjustedTvlCost ? `${row.adjustedTvlCost.toFixed(2)}%` : '-'}
                         </td>
                         <td className="px-4 py-3 text-right font-mono">
@@ -807,7 +1018,7 @@ export default function SpreadsheetPage() {
           <h2 className="text-xl font-bold mb-4">How to Use</h2>
           <ol className="list-decimal list-inside space-y-2 text-gray-300">
             <li>Select the epoch you want to export</li>
-            <li>Click on the <span className="text-yellow-400">MON TWAP price</span> to edit it if needed</li>
+            <li>Click on the <span className="text-yellow-400">MON Price</span> to edit it if needed</li>
             <li>Click protocol rows to expand/collapse individual pools</li>
             <li>Click &quot;Copy&quot; to copy data to clipboard</li>
             <li>Paste into your Google Sheet</li>
@@ -817,11 +1028,11 @@ export default function SpreadsheetPage() {
             <h3 className="font-bold mb-2">Column Explanations</h3>
             <ul className="text-sm text-gray-400 space-y-1">
               <li><strong>MON Qty</strong> - Raw MON token amount from Merkl</li>
-              <li><strong>MON Value</strong> - MON Qty × MON TWAP price</li>
+              <li><strong>MON Value</strong> - MON Qty × MON Price</li>
               <li><strong>External</strong> - Non-MON incentives (AUSD, etc.) in USD</li>
-              <li><strong>Adjusted Total</strong> - MON Value + External</li>
-              <li><strong className="text-orange-400">TVL Cost</strong> - (MON Value / epoch_days × 365 / TVL) × 100 - annualized cost of MON incentives relative to TVL</li>
-              <li><strong className="text-pink-400">Adj TVL Cost</strong> - (Adjusted Total / epoch_days × 365 / TVL) × 100 - annualized total incentive cost relative to TVL</li>
+              <li><strong>Adjusted Total</strong> - MON Incentives + External</li>
+              <li><strong className="text-orange-400">TVL Cost</strong> - (Incentives / epoch_days × 365 / TVL) × 100 - annualized cost of MON incentives relative to TVL</li>
+              <li><strong className="text-pink-400">Total TVL Cost</strong> - (Adjusted Total / epoch_days × 365 / TVL) × 100 - annualized total incentive cost relative to TVL</li>
             </ul>
           </div>
         </div>
