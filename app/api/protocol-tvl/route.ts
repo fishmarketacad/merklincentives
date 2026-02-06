@@ -812,7 +812,7 @@ export async function PUT(request: NextRequest) {
 
     for (const market of markets) {
       const { protocol, marketName, tokenPair } = market;
-      const marketKey = `${protocol}-${marketName}`;
+      const marketKey = `${protocol.toLowerCase()}-${marketName}`;
       
       // Extract token pair from market name if not provided
       const extractedTokenPair = tokenPair || extractTokenPair(marketName);

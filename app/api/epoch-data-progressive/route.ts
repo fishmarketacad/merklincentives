@@ -300,6 +300,16 @@ async function fetchComplete(epoch: Epoch, baseUrl: string): Promise<Progressive
     warnings.push(`Pool volume fetch returned error ${marketVolumesResponse.status}`);
   }
 
+  // Debug: Log volume fetch results
+  const volumeKeys = Object.keys(marketVolumes);
+  const volumesWithData = volumeKeys.filter(k => marketVolumes[k]?.volumeInRange !== null || marketVolumes[k]?.volume7d !== null);
+  console.log(`[Progressive Stage 3] Market volumes: ${volumeKeys.length} keys, ${volumesWithData.length} with data`);
+  if (volumesWithData.length > 0) {
+    console.log('[Progressive Stage 3] Sample volumes:', volumesWithData.slice(0, 3).map(k => ({ key: k, vol: marketVolumes[k]?.volumeInRange })));
+  } else if (volumeKeys.length > 0) {
+    console.log('[Progressive Stage 3] Sample errors:', volumeKeys.slice(0, 3).map(k => ({ key: k, error: marketVolumes[k]?.error })));
+  }
+
   // Add volumes to pools
   const poolsWithVolumes = stage2Data.pools.map(pool => {
     const marketKey = `${pool.protocol.toLowerCase()}-${pool.pool}`;
