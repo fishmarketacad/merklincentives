@@ -195,6 +195,13 @@ export default function SpreadsheetPage() {
   const [viewMode, setViewMode] = useState<'protocols' | 'pools' | 'funders'>('protocols');
   const [showDebug, setShowDebug] = useState(false);
 
+  // Client-side cache for epoch data
+  const [epochCache, setEpochCache] = useState<Record<string, EpochData>>({});
+
+  // Sorting state
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
   // Editable MON TWAP price
   const [customMonTwap, setCustomMonTwap] = useState<number | null>(null);
   const [editingTwap, setEditingTwap] = useState(false);
@@ -230,6 +237,13 @@ export default function SpreadsheetPage() {
   }, [selectedWeekId, selectedEpoch]);
 
   const fetchEpochData = async (epochId: string, forceRefresh: boolean) => {
+    // Check cache first (unless force refresh)
+    if (!forceRefresh && epochCache[epochId]) {
+      console.log(`[Cache] Using cached data for epoch ${epochId}`);
+      setEpochData(epochCache[epochId]);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setLoadingStage(null);
@@ -245,6 +259,7 @@ export default function SpreadsheetPage() {
         }
         const data = await response.json();
         setEpochData(data);
+        setEpochCache(prev => ({ ...prev, [epochId]: data }));
       } else {
         // Progressive loading: fetch in 3 stages
         // Stage 1: MON incentive data
@@ -276,6 +291,9 @@ export default function SpreadsheetPage() {
         }
         const stage3Data = await stage3Response.json();
         setEpochData(stage3Data);
+
+        // Cache the complete data
+        setEpochCache(prev => ({ ...prev, [epochId]: stage3Data }));
       }
 
       // Fetch previous epoch (for comparison) - use full endpoint
@@ -431,6 +449,16 @@ export default function SpreadsheetPage() {
     return { ...prevEpochData, protocolTotals, funderTotals };
   }, [prevEpochData, prevEpoch, prevEpochDays]);
 
+  // Handler for sorting
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('desc');
+    }
+  };
+
   // Group pools by protocol for collapsible view
   const protocolGroups = useMemo((): (ProtocolGroup & { key: string })[] => {
     if (!recalculatedData) return [];
@@ -456,9 +484,68 @@ export default function SpreadsheetPage() {
       }
     }
 
-    // Sort by total MON value descending
-    return Object.values(groups).sort((a, b) => b.total.monValueUSD - a.total.monValueUSD);
-  }, [recalculatedData, expandedProtocols]);
+    let sorted = Object.values(groups);
+
+    // Apply sorting if column is selected
+    if (sortColumn) {
+      sorted = sorted.sort((a, b) => {
+        let aVal: any = 0;
+        let bVal: any = 0;
+
+        switch (sortColumn) {
+          case 'protocol':
+            aVal = a.total.protocol.toLowerCase();
+            bVal = b.total.protocol.toLowerCase();
+            break;
+          case 'monQuantity':
+            aVal = a.total.monQuantity;
+            bVal = b.total.monQuantity;
+            break;
+          case 'monValueUSD':
+            aVal = a.total.monValueUSD;
+            bVal = b.total.monValueUSD;
+            break;
+          case 'externalIncentiveUSD':
+            aVal = a.total.externalIncentiveUSD;
+            bVal = b.total.externalIncentiveUSD;
+            break;
+          case 'adjustedTotal':
+            aVal = a.total.adjustedTotal;
+            bVal = b.total.adjustedTotal;
+            break;
+          case 'tvl':
+            aVal = a.total.tvl || 0;
+            bVal = b.total.tvl || 0;
+            break;
+          case 'tvlCost':
+            aVal = a.total.tvlCost || 0;
+            bVal = b.total.tvlCost || 0;
+            break;
+          case 'adjustedTvlCost':
+            aVal = a.total.adjustedTvlCost || 0;
+            bVal = b.total.adjustedTvlCost || 0;
+            break;
+          case 'volume':
+            aVal = a.total.volume || 0;
+            bVal = b.total.volume || 0;
+            break;
+          default:
+            aVal = a.total.monValueUSD;
+            bVal = b.total.monValueUSD;
+        }
+
+        if (typeof aVal === 'string') {
+          return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+        }
+        return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+      });
+    } else {
+      // Default sort by MON value descending
+      sorted = sorted.sort((a, b) => b.total.monValueUSD - a.total.monValueUSD);
+    }
+
+    return sorted;
+  }, [recalculatedData, expandedProtocols, sortColumn, sortDirection]);
 
   const toggleProtocol = (protocolKey: string) => {
     setExpandedProtocols(prev => {
@@ -810,16 +897,88 @@ export default function SpreadsheetPage() {
                 <thead className="bg-gray-700">
                   <tr>
                     <th className="px-4 py-3 text-left w-8"></th>
-                    <th className="px-4 py-3 text-left"><Tooltip text="Protocol name from Merkl campaigns">Protocol</Tooltip></th>
+                    <th
+                      className="px-4 py-3 text-left cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('protocol')}
+                    >
+                      <div className="flex items-center gap-1">
+                        <Tooltip text="Protocol name from Merkl campaigns">Protocol</Tooltip>
+                        {sortColumn === 'protocol' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
                     <th className="px-4 py-3 text-left"><Tooltip text="Pool/market name or 'ALL' for protocol totals">Pool</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="Raw MON token quantity from Merkl">MON Qty</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="MON Qty × MON Price">USD Value</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="Non-MON incentives (AUSD, etc.) in USD">External</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="MON Incentives + External">Total Incentive</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="Total Value Locked (DeFiLlama/The Graph)">TVL</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="(MON Incentives ÷ days × 365 ÷ TVL) × 100">TVL Cost</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="(Total Incentives ÷ days × 365 ÷ TVL) × 100">Total TVL Cost</Tooltip></th>
-                    <th className="px-4 py-3 text-right"><Tooltip text="Trading volume (Dune Analytics)">Volume</Tooltip></th>
+                    <th
+                      className="px-4 py-3 text-right cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('monQuantity')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip text="Raw MON token quantity from Merkl">MON Qty</Tooltip>
+                        {sortColumn === 'monQuantity' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
+                    <th
+                      className="px-4 py-3 text-right cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('monValueUSD')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip text="MON Qty × MON Price">USD Value</Tooltip>
+                        {sortColumn === 'monValueUSD' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
+                    <th
+                      className="px-4 py-3 text-right cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('externalIncentiveUSD')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip text="Non-MON incentives (AUSD, etc.) in USD">External</Tooltip>
+                        {sortColumn === 'externalIncentiveUSD' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
+                    <th
+                      className="px-4 py-3 text-right cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('adjustedTotal')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip text="MON Incentives + External">Total Incentive</Tooltip>
+                        {sortColumn === 'adjustedTotal' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
+                    <th
+                      className="px-4 py-3 text-right cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('tvl')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip text="Total Value Locked (DeFiLlama/The Graph)">TVL</Tooltip>
+                        {sortColumn === 'tvl' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
+                    <th
+                      className="px-4 py-3 text-right cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('tvlCost')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip text="(MON Incentives ÷ days × 365 ÷ TVL) × 100">TVL Cost</Tooltip>
+                        {sortColumn === 'tvlCost' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
+                    <th
+                      className="px-4 py-3 text-right cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('adjustedTvlCost')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip text="(Total Incentives ÷ days × 365 ÷ TVL) × 100">Total TVL Cost</Tooltip>
+                        {sortColumn === 'adjustedTvlCost' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
+                    <th
+                      className="px-4 py-3 text-right cursor-pointer hover:bg-gray-600"
+                      onClick={() => handleSort('volume')}
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <Tooltip text="Trading volume (Dune Analytics)">Volume</Tooltip>
+                        {sortColumn === 'volume' && <span className="text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
