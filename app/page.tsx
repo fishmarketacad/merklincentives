@@ -1616,7 +1616,7 @@ function HomeContent() {
     const dateRangeFormatted = `${startDateFormatted} - ${endDateFormatted}`;
 
     const csvLines = [
-      `Platform Protocol,Funding Protocol,Market,Incentive (MON),Incentive (USD),APR (%),"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
+      `Platform Protocol,Funding Protocol,Market,Incentive (MON),Incentive (USD),External Incentives (USD),APR (%),"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
     ];
 
     // Group rows by platform protocol for subtotals
@@ -1634,6 +1634,7 @@ function HomeContent() {
       const protocolRows = groupedByProtocol[protocol];
       let protocolTotalMON = 0;
       let protocolTotalUSD = 0;
+      let protocolTotalExternalIncentives = 0;
       let protocolTotalTVL = 0;
       let protocolTotalVolume = 0;
 
@@ -1648,6 +1649,11 @@ function HomeContent() {
           : 0;
         const usdFormatted = incentiveUSD > 0 ? incentiveUSD.toFixed(2) : '';
 
+        // Format external incentives
+        const externalIncentiveFormatted = row.market.externalIncentiveUSD && row.market.externalIncentiveUSD > 0
+          ? row.market.externalIncentiveUSD.toFixed(2)
+          : '';
+
         // Format APR value
         const aprFormatted = row.market.apr !== null && row.market.apr !== undefined
           ? row.market.apr.toFixed(2)
@@ -1656,6 +1662,9 @@ function HomeContent() {
         // Track totals for subtotal row (sum of individual pools)
         protocolTotalMON += row.market.totalMON;
         protocolTotalUSD += incentiveUSD;
+        if (row.market.externalIncentiveUSD && row.market.externalIncentiveUSD > 0) {
+          protocolTotalExternalIncentives += row.market.externalIncentiveUSD;
+        }
         if (row.market.tvl !== null && row.market.tvl !== undefined && row.market.tvl > 0) {
           protocolTotalTVL += row.market.tvl;
         }
@@ -1690,18 +1699,19 @@ function HomeContent() {
           : '';
 
         csvLines.push(
-          `${row.platform.platformProtocol},${row.funding.fundingProtocol},"${row.market.marketName}",${monFormatted},"${usdFormatted}","${aprFormatted}","${tvlFormatted}","${tvlCostFormatted}","${tvlCostWoWFormatted}","${volumeFormatted}","${volumeCostFormatted}","${volumeCostWoWFormatted}"`
+          `${row.platform.platformProtocol},${row.funding.fundingProtocol},"${row.market.marketName}",${monFormatted},"${usdFormatted}","${externalIncentiveFormatted}","${aprFormatted}","${tvlFormatted}","${tvlCostFormatted}","${tvlCostWoWFormatted}","${volumeFormatted}","${volumeCostFormatted}","${volumeCostWoWFormatted}"`
         );
       }
 
       // Add SUBTOTAL row - sum of individual pool values
       const subtotalMON = protocolTotalMON.toFixed(2);
       const subtotalUSD = protocolTotalUSD > 0 ? protocolTotalUSD.toFixed(2) : '';
+      const subtotalExternal = protocolTotalExternalIncentives > 0 ? protocolTotalExternalIncentives.toFixed(2) : '';
       const subtotalTVL = protocolTotalTVL > 0 ? protocolTotalTVL.toFixed(2) : '';
       const subtotalVolume = protocolTotalVolume > 0 ? protocolTotalVolume.toFixed(2) : '';
 
       csvLines.push(
-        `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}",,"${subtotalTVL}",,,\"${subtotalVolume}\",,`
+        `${protocol} SUBTOTAL,,,${subtotalMON},"${subtotalUSD}","${subtotalExternal}",,"${subtotalTVL}",,,\"${subtotalVolume}\",,`
       );
 
       // Add PROTOCOL TOTAL row - protocol-level data from DeFiLlama/Dune APIs
@@ -1716,7 +1726,7 @@ function HomeContent() {
       const protocolVolumeFormatted = protocolVolume !== null ? protocolVolume.toFixed(2) : '';
 
       csvLines.push(
-        `${protocol} PROTOCOL TOTAL,,,,,,\"${protocolTVLFormatted}\",,,\"${protocolVolumeFormatted}\",,`
+        `${protocol} PROTOCOL TOTAL,,,,,,,\"${protocolTVLFormatted}\",,,\"${protocolVolumeFormatted}\",,`
       );
     }
 

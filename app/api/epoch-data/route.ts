@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { EPOCHS, getEpochById, Epoch } from '@/lib/epochs';
+import { EPOCHS, getEpochByIdAsync, getAllEpochs, Epoch } from '@/lib/epochs';
 import { getCachedEpochData, cacheEpochData } from '@/app/lib/cache';
 
 export interface PoolData {
@@ -38,16 +38,41 @@ const TVL_PROTOCOLS = [
 // For Merkl incentives queries - use 'all' to get all campaigns (avoids case-sensitivity issues)
 const MERKL_PROTOCOLS = ['all'];
 
+/** Base URL for self-requests (avoids "fetch failed" on localhost: use nextUrl.origin + IPv4 for reliability) */
+function getBaseUrl(request: NextRequest): string {
+  const origin = request.nextUrl?.origin;
+  if (origin) {
+    // Use 127.0.0.1 instead of localhost to avoid IPv6 vs IPv4 mismatch when server calls itself
+    if (origin.startsWith('http://localhost:') || origin.startsWith('https://localhost:')) {
+      const port = request.nextUrl.port || (origin.startsWith('https') ? '3000' : '3000');
+      return `http://127.0.0.1:${port}`;
+    }
+    return origin;
+  }
+  const host = request.headers.get('host');
+  const proto = request.headers.get('x-forwarded-proto') || 'http';
+  if (host) {
+    const base = `${proto}://${host}`;
+    if (base.includes('localhost')) {
+      const port = (host.split(':')[1]) || '3000';
+      return `http://127.0.0.1:${port}`;
+    }
+    return base;
+  }
+  return 'http://127.0.0.1:3000';
+}
+
 // GET: List all epochs or get data for specific epoch
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const epochId = searchParams.get('epoch');
   const forceRefresh = searchParams.get('refresh') === 'true';
 
-  // If no epoch specified, return list of all epochs
+  // If no epoch specified, return list of all epochs (including dynamic)
   if (!epochId) {
+    const allEpochs = await getAllEpochs();
     return NextResponse.json({
-      epochs: EPOCHS.map(e => ({
+      epochs: allEpochs.map(e => ({
         id: e.id,
         name: e.name,
         startDate: e.startDate,
@@ -55,12 +80,13 @@ export async function GET(request: NextRequest) {
         snapshotDate: e.snapshotDate,
         monTwap: e.monTwap,
         monTwapChange: e.monTwapChange,
+        isGenerated: e.isGenerated,
       }))
     });
   }
 
-  // Get specific epoch
-  const epoch = getEpochById(epochId);
+  // Get specific epoch (check both hardcoded and dynamic)
+  const epoch = await getEpochByIdAsync(epochId);
   if (!epoch) {
     return NextResponse.json({ error: 'Epoch not found' }, { status: 404 });
   }
@@ -78,9 +104,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Get base URL from request
-    const requestUrl = new URL(request.url);
-    const baseUrl = `${requestUrl.protocol}//${requestUrl.host}`;
+    const baseUrl = getBaseUrl(request);
 
     const data = await fetchEpochData(epoch, baseUrl);
 
@@ -103,7 +127,7 @@ export async function POST(request: NextRequest) {
   try {
     const { epochId } = await request.json();
 
-    const epoch = getEpochById(epochId);
+    const epoch = await getEpochByIdAsync(epochId);
     if (!epoch) {
       return NextResponse.json({ error: 'Epoch not found' }, { status: 404 });
     }
@@ -111,9 +135,7 @@ export async function POST(request: NextRequest) {
     // Check if this is a historical epoch
     const isHistorical = new Date(epoch.endDate).getTime() < Date.now() - 86400000;
 
-    // Get base URL from request
-    const requestUrl = new URL(request.url);
-    const baseUrl = `${requestUrl.protocol}//${requestUrl.host}`;
+    const baseUrl = getBaseUrl(request);
 
     const data = await fetchEpochData(epoch, baseUrl);
 
@@ -196,6 +218,7 @@ async function fetchEpochData(epoch: Epoch, baseUrl: string): Promise<EpochData>
   }
   console.log('[EpochData] TVL data keys:', Object.keys(tvlData.tvlData || {}));
   console.log('[EpochData] Volume data keys:', Object.keys(tvlData.dexVolumeData || {}));
+  console.log('[EpochData] Uniswap pool TVL keys:', Object.keys(uniswapPoolTvl));
 
   // Fetch per-market volumes
   const markets: { protocol: string; marketName: string }[] = [];
@@ -278,7 +301,8 @@ async function fetchEpochData(epoch: Epoch, baseUrl: string): Promise<EpochData>
       }
 
       for (const market of (funding.markets || [])) {
-        const marketKey = `${platform.platformProtocol.toLowerCase()}_${market.marketName}`;
+        // Key format must match protocol-tvl PUT response: "protocol-marketName"
+        const marketKey = `${platform.platformProtocol.toLowerCase()}-${market.marketName}`;
         const perMarketVol = marketVolumes[marketKey];
 
         const monQty = market.totalMON || 0;
@@ -288,9 +312,21 @@ async function fetchEpochData(epoch: Epoch, baseUrl: string): Promise<EpochData>
         // For Uniswap pools, try to get pool-level TVL from The Graph
         let poolTvl = market.tvl || null;
         if (platform.platformProtocol.toLowerCase().includes('uniswap')) {
-          const uniPoolTvl = uniswapPoolTvl[market.marketName];
-          if (uniPoolTvl) {
-            poolTvl = uniPoolTvl;
+          // Extract token pair from market name (e.g., "Provide liquidity to UniswapV4 MON-USDC 0.05%" -> "MON/USDC")
+          const tokenPairMatch = market.marketName.match(/([A-Za-z0-9]+)-([A-Za-z0-9]+)/);
+          if (tokenPairMatch) {
+            const tokenPair = `${tokenPairMatch[1]}/${tokenPairMatch[2]}`.toUpperCase();
+            const uniPoolTvl = uniswapPoolTvl[tokenPair];
+            if (uniPoolTvl) {
+              poolTvl = uniPoolTvl;
+            } else {
+              // Try reverse order (e.g., "USDC/MON" instead of "MON/USDC")
+              const reversePair = `${tokenPairMatch[2]}/${tokenPairMatch[1]}`.toUpperCase();
+              const reversePoolTvl = uniswapPoolTvl[reversePair];
+              if (reversePoolTvl) {
+                poolTvl = reversePoolTvl;
+              }
+            }
           }
         }
 

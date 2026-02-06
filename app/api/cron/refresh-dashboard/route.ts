@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setCache, updateAIAnalysis } from '@/app/lib/dashboardCache';
-import { getCurrentEpoch } from '@/lib/epochs';
+import { getAllEpochs, shouldGenerateNewEpoch, generateMissingWeekEpochs } from '@/lib/epochs';
 
 // Common protocols list (same as frontend)
 const commonProtocols = [
@@ -676,20 +676,37 @@ export async function GET(request: NextRequest) {
     
     console.log('[Cron] AI analysis HTTP request initiated (running in separate function instance)');
 
-    // Also refresh current epoch data for the spreadsheet export page
+    // Auto-generate new week epochs if needed and refresh epoch data for spreadsheet page
     try {
-      const currentEpoch = getCurrentEpoch();
-      console.log('[Cron] Refreshing current epoch data:', currentEpoch.id);
+      // Check if we need to generate new week epochs
+      const needsNewEpochs = await shouldGenerateNewEpoch();
+      if (needsNewEpochs) {
+        console.log('[Cron] Generating missing week epochs...');
+        const newEpochs = await generateMissingWeekEpochs();
+        if (newEpochs.length > 0) {
+          console.log('[Cron] Generated', newEpochs.length, 'new week(s):', newEpochs.map(e => e.name).join(', '));
+        }
+      }
+
+      // Get the three most recent epochs to refresh (in case multiple weeks were generated)
+      const allEpochs = await getAllEpochs();
+      const epochsToRefresh = allEpochs.slice(0, 3);
+
+      console.log('[Cron] Refreshing epoch data for:', epochsToRefresh.map(e => e.id).join(', '));
       const epochUrl = addBypassToUrl(`${baseUrl}/api/epoch-data`);
-      fetch(epochUrl, {
-        method: 'POST',
-        headers: internalHeaders,
-        body: JSON.stringify({ epochId: currentEpoch.id }),
-      })
-        .then((res) => console.log('[Cron] Epoch data refresh status:', res.status))
-        .catch((err) => console.warn('[Cron] Epoch data refresh failed:', err.message));
+
+      // Refresh each epoch (fire-and-forget)
+      for (const epoch of epochsToRefresh) {
+        fetch(epochUrl, {
+          method: 'POST',
+          headers: internalHeaders,
+          body: JSON.stringify({ epochId: epoch.id }),
+        })
+          .then((res) => console.log(`[Cron] Epoch ${epoch.id} refresh status:`, res.status))
+          .catch((err) => console.warn(`[Cron] Epoch ${epoch.id} refresh failed:`, err.message));
+      }
     } catch (epochError: any) {
-      console.warn('[Cron] Failed to trigger epoch refresh:', epochError.message);
+      console.warn('[Cron] Failed to handle epoch generation/refresh:', epochError.message);
     }
 
     return NextResponse.json({

@@ -322,3 +322,60 @@ export async function getCachedEpochData(
   const key = CacheKeys.epochData(epochId);
   return await getCache<any>(key);
 }
+
+/**
+ * Dynamic epochs stored in Redis
+ * These are auto-generated epochs that extend beyond the hardcoded list
+ */
+const DYNAMIC_EPOCHS_KEY = 'epochs:dynamic';
+
+export interface DynamicEpoch {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  snapshotDate: string;
+  monTwap: number;
+  monTwapChange: string;
+  isGenerated?: boolean; // Flag to indicate this was auto-generated
+}
+
+/**
+ * Get all dynamic epochs from Redis
+ */
+export async function getDynamicEpochs(): Promise<DynamicEpoch[]> {
+  const epochs = await getCache<DynamicEpoch[]>(DYNAMIC_EPOCHS_KEY);
+  return epochs || [];
+}
+
+/**
+ * Save dynamic epochs to Redis
+ */
+export async function saveDynamicEpochs(epochs: DynamicEpoch[]): Promise<void> {
+  // Store for 30 days (epochs are semi-permanent)
+  await setCache(DYNAMIC_EPOCHS_KEY, epochs, 60 * 60 * 24 * 30);
+}
+
+/**
+ * Add a new dynamic epoch
+ */
+export async function addDynamicEpoch(epoch: DynamicEpoch): Promise<void> {
+  const existing = await getDynamicEpochs();
+  // Check if epoch with same ID already exists
+  if (!existing.find(e => e.id === epoch.id)) {
+    existing.unshift(epoch); // Add to beginning (newest first)
+    await saveDynamicEpochs(existing);
+  }
+}
+
+/**
+ * Update a dynamic epoch (e.g., to set the TWAP after it's calculated)
+ */
+export async function updateDynamicEpoch(epochId: string, updates: Partial<DynamicEpoch>): Promise<void> {
+  const existing = await getDynamicEpochs();
+  const index = existing.findIndex(e => e.id === epochId);
+  if (index !== -1) {
+    existing[index] = { ...existing[index], ...updates };
+    await saveDynamicEpochs(existing);
+  }
+}
