@@ -38,6 +38,7 @@ interface ProgressiveResponse {
   funderTotals: Record<string, PoolData>;
   epoch: Epoch;
   fetchedAt: string;
+  warnings?: string[];  // Track data fetching issues
 }
 
 // Optimized progressive loading endpoint
@@ -247,6 +248,9 @@ async function fetchComplete(epoch: Epoch, baseUrl: string): Promise<Progressive
     'townsquare', 'Beefy', 'accountable', 'curve', 'lfj', 'wlfi'
   ];
 
+  // Track warnings for incomplete data
+  const warnings: string[] = [];
+
   // Fetch protocol volumes and per-market volumes in parallel
   const [tvlResponse, marketVolumesResponse] = await Promise.all([
     fetch(`${baseUrl}/api/protocol-tvl`, {
@@ -258,6 +262,10 @@ async function fetchComplete(epoch: Epoch, baseUrl: string): Promise<Progressive
         endDate: epoch.endDate
       }),
       cache: 'no-store',
+    }).catch((err) => {
+      console.error('[Progressive Stage 3] Protocol volume fetch failed:', err.message);
+      warnings.push('Protocol-level volume data unavailable (Dune API timeout or error)');
+      return null;
     }),
     fetch(`${baseUrl}/api/protocol-tvl`, {
       method: 'PUT',
@@ -271,13 +279,26 @@ async function fetchComplete(epoch: Epoch, baseUrl: string): Promise<Progressive
         endDate: epoch.endDate
       }),
       cache: 'no-store',
-    }).catch(() => null)
+    }).catch((err) => {
+      console.error('[Progressive Stage 3] Market volume fetch failed:', err.message);
+      warnings.push('Pool-level volume data unavailable (Dune API timeout or error)');
+      return null;
+    })
   ]);
 
-  const tvlData = tvlResponse.ok ? await tvlResponse.json() : { dexVolumeData: {} };
+  const tvlData = (tvlResponse && tvlResponse.ok) ? await tvlResponse.json() : { dexVolumeData: {} };
+  if (tvlResponse && !tvlResponse.ok) {
+    console.warn('[Progressive Stage 3] Protocol TVL response not OK:', tvlResponse.status);
+    warnings.push(`Protocol volume fetch returned error ${tvlResponse.status}`);
+  }
+
   const marketVolumes = (marketVolumesResponse && marketVolumesResponse.ok)
     ? (await marketVolumesResponse.json()).marketVolumes || {}
     : {};
+  if (marketVolumesResponse && !marketVolumesResponse.ok) {
+    console.warn('[Progressive Stage 3] Market volumes response not OK:', marketVolumesResponse.status);
+    warnings.push(`Pool volume fetch returned error ${marketVolumesResponse.status}`);
+  }
 
   // Add volumes to pools
   const poolsWithVolumes = stage2Data.pools.map(pool => {
@@ -295,7 +316,15 @@ async function fetchComplete(epoch: Epoch, baseUrl: string): Promise<Progressive
                    tvlData.dexVolumeData?.[key]?.volume7d || null;
   }
 
-  console.log('[Progressive Stage 3] Complete with all data');
+  // Check if we got any volume data at all
+  const hasAnyVolume = poolsWithVolumes.some(p => p.volume !== null) ||
+                       Object.values(stage2Data.protocolTotals).some(p => p.volume !== null);
+
+  if (!hasAnyVolume && warnings.length === 0) {
+    warnings.push('No volume data available from Dune Analytics');
+  }
+
+  console.log('[Progressive Stage 3] Complete with all data. Warnings:', warnings.length);
 
   return {
     stage: 3,
@@ -305,6 +334,7 @@ async function fetchComplete(epoch: Epoch, baseUrl: string): Promise<Progressive
     funderTotals: stage2Data.funderTotals,
     epoch,
     fetchedAt: new Date().toISOString(),
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
 }
 

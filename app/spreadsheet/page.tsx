@@ -112,6 +112,7 @@ interface EpochData {
   protocolTotals: Record<string, PoolData>;
   funderTotals: Record<string, PoolData>; // Aggregates by funding protocol (e.g., RENZO, WLFI)
   fetchedAt: string;
+  warnings?: string[];  // Data fetching warnings
   debug?: {
     baseUrl: string;
     monDataResults: number;
@@ -839,6 +840,23 @@ export default function SpreadsheetPage() {
           <div className="text-center py-12">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
             <p className="mt-4 text-gray-400">Fetching epoch data...</p>
+          </div>
+        )}
+
+        {/* Data Warnings */}
+        {epochData?.warnings && epochData.warnings.length > 0 && (
+          <div className="mb-4 bg-yellow-900/30 border border-yellow-600/50 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <span className="text-yellow-500 text-lg">⚠️</span>
+              <div className="flex-1">
+                <p className="text-yellow-200 font-semibold text-sm mb-1">Data Incomplete</p>
+                <ul className="text-yellow-300 text-xs space-y-1">
+                  {epochData.warnings.map((warning, idx) => (
+                    <li key={idx}>• {warning}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
         )}
 
