@@ -137,6 +137,7 @@ function HomeContent() {
   const [protocolTVLMetadata, setProtocolTVLMetadata] = useState<ProtocolTVLMetadata>({});
   const [protocolDEXVolume, setProtocolDEXVolume] = useState<ProtocolDEXVolume>({});
   const [marketVolumes, setMarketVolumes] = useState<MarketVolumes>({});
+  const [uniswapHistoricalTVL, setUniswapHistoricalTVL] = useState<Record<string, number>>({});
   const [previousWeekResults, setPreviousWeekResults] = useState<QueryResult[]>([]);
   const [previousWeekProtocolTVL, setPreviousWeekProtocolTVL] = useState<ProtocolTVL>({});
   const [previousWeekProtocolDEXVolume, setPreviousWeekProtocolDEXVolume] = useState<ProtocolDEXVolume>({});
@@ -1346,7 +1347,7 @@ function HomeContent() {
     return null;
   };
 
-  const handleQuery = async (autoRun = false) => {
+  const handleQuery = async (autoRun = false, forceRefresh = false) => {
     if (protocols.length === 0) {
       setError('Please select at least one protocol');
       if (autoRun) setIsAutoLoading(false);
@@ -1388,6 +1389,7 @@ function HomeContent() {
             startDate,
             endDate,
             token: 'WMON',
+            noCache: forceRefresh,
           }),
         }),
         fetch('/api/protocol-tvl', {
@@ -1431,7 +1433,57 @@ function HomeContent() {
         throw new Error(monSpentData.error || 'Failed to fetch data');
       }
 
-      setResults(monSpentData.results || []);
+      // Fetch historical Uniswap TVL from The Graph (more accurate than Merkl's live TVL)
+      let uniswapTvlMap: Record<string, number> = {};
+      try {
+        const uniswapTvlResponse = await fetch(`/api/uniswap-tvl?date=${endDate}`);
+        if (uniswapTvlResponse.ok) {
+          const uniswapTvlData = await uniswapTvlResponse.json();
+          // Map pool names to TVL values (handle both "MON-USDC" and "USDC-MON" formats)
+          for (const [poolName, poolInfo] of Object.entries(uniswapTvlData.pools || {})) {
+            const tvl = (poolInfo as { tvlUSD: number }).tvlUSD;
+            uniswapTvlMap[poolName.toUpperCase()] = tvl;
+            // Also add reverse order (e.g., "USDC-MON" for "MON-USDC")
+            const [token0, token1] = poolName.split('-');
+            if (token0 && token1) {
+              uniswapTvlMap[`${token1}-${token0}`.toUpperCase()] = tvl;
+            }
+          }
+          setUniswapHistoricalTVL(uniswapTvlMap);
+          console.log('[Uniswap TVL] Fetched historical TVL for', Object.keys(uniswapTvlMap).length / 2, 'pools');
+        }
+      } catch (uniswapTvlErr) {
+        console.warn('Failed to fetch Uniswap historical TVL:', uniswapTvlErr);
+      }
+
+      // Update results with historical Uniswap TVL
+      const updatedResults = (monSpentData.results || []).map((platform: QueryResult) => {
+        if (!platform.platformProtocol.toLowerCase().includes('uniswap')) {
+          return platform;
+        }
+        // Update TVL for Uniswap markets
+        return {
+          ...platform,
+          fundingProtocols: platform.fundingProtocols.map(funding => ({
+            ...funding,
+            markets: funding.markets.map(market => {
+              // Extract token pair from market name (e.g., "UniswapV4 MON-USDC 0.05%" -> "MON-USDC")
+              const tokenPairMatch = market.marketName.match(/([A-Za-z0-9]+)-([A-Za-z0-9]+)/);
+              if (tokenPairMatch) {
+                const tokenPair = `${tokenPairMatch[1]}-${tokenPairMatch[2]}`.toUpperCase();
+                const historicalTvl = uniswapTvlMap[tokenPair];
+                if (historicalTvl !== undefined) {
+                  console.log(`[Uniswap TVL] Updated ${tokenPair}: ${market.tvl?.toLocaleString()} -> ${historicalTvl.toLocaleString()}`);
+                  return { ...market, tvl: historicalTvl };
+                }
+              }
+              return market;
+            }),
+          })),
+        };
+      });
+
+      setResults(updatedResults);
 
       // Update TVL and DEX volume data
       const tvlData = await tvlResponse.json();
@@ -1450,7 +1502,48 @@ function HomeContent() {
       try {
         const prevMonSpentData = await prevMonSpentResponse.json();
         if (prevMonSpentResponse.ok && prevMonSpentData.results) {
-          prevWeekResults = prevMonSpentData.results || [];
+          // Fetch historical Uniswap TVL for previous week
+          let prevUniswapTvlMap: Record<string, number> = {};
+          try {
+            const prevUniswapTvlResponse = await fetch(`/api/uniswap-tvl?date=${prevEndDate}`);
+            if (prevUniswapTvlResponse.ok) {
+              const prevUniswapTvlData = await prevUniswapTvlResponse.json();
+              for (const [poolName, poolInfo] of Object.entries(prevUniswapTvlData.pools || {})) {
+                const tvl = (poolInfo as { tvlUSD: number }).tvlUSD;
+                prevUniswapTvlMap[poolName.toUpperCase()] = tvl;
+                const [token0, token1] = poolName.split('-');
+                if (token0 && token1) {
+                  prevUniswapTvlMap[`${token1}-${token0}`.toUpperCase()] = tvl;
+                }
+              }
+            }
+          } catch (prevUniswapErr) {
+            console.warn('Failed to fetch previous week Uniswap TVL:', prevUniswapErr);
+          }
+
+          // Update previous week results with historical Uniswap TVL
+          prevWeekResults = (prevMonSpentData.results || []).map((platform: QueryResult) => {
+            if (!platform.platformProtocol.toLowerCase().includes('uniswap')) {
+              return platform;
+            }
+            return {
+              ...platform,
+              fundingProtocols: platform.fundingProtocols.map(funding => ({
+                ...funding,
+                markets: funding.markets.map(market => {
+                  const tokenPairMatch = market.marketName.match(/([A-Za-z0-9]+)-([A-Za-z0-9]+)/);
+                  if (tokenPairMatch) {
+                    const tokenPair = `${tokenPairMatch[1]}-${tokenPairMatch[2]}`.toUpperCase();
+                    const historicalTvl = prevUniswapTvlMap[tokenPair];
+                    if (historicalTvl !== undefined) {
+                      return { ...market, tvl: historicalTvl };
+                    }
+                  }
+                  return market;
+                }),
+              })),
+            };
+          });
           setPreviousWeekResults(prevWeekResults);
         }
 
@@ -3088,23 +3181,35 @@ ${JSON.stringify(fullInputData, null, 2)}
 
           {/* Query and Analyze Buttons */}
           <div className="grid grid-cols-2 gap-4">
-            <button
-              onClick={() => handleQuery()}
-              disabled={loading || analyzing}
-              className="bg-gradient-to-r from-purple-600 to-purple-700 text-white py-3 px-6 rounded-lg font-semibold text-lg hover:from-purple-500 hover:to-purple-600 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-purple-500/50 transform hover:scale-[1.02] active:scale-[0.98]"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center">
-                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Querying...
-                </span>
-              ) : (
-                'Query MON Spent'
-              )}
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => handleQuery()}
+                disabled={loading || analyzing}
+                className="flex-1 bg-gradient-to-r from-purple-600 to-purple-700 text-white py-3 px-6 rounded-lg font-semibold text-lg hover:from-purple-500 hover:to-purple-600 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-purple-500/50 transform hover:scale-[1.02] active:scale-[0.98]"
+              >
+                {loading ? (
+                  <span className="flex items-center justify-center">
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Querying...
+                  </span>
+                ) : (
+                  'Query MON Spent'
+                )}
+              </button>
+              <button
+                onClick={() => handleQuery(false, true)}
+                disabled={loading || analyzing}
+                title="Force refresh (bypass cache)"
+                className="px-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg font-semibold hover:from-orange-400 hover:to-orange-500 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed transition-all shadow-lg"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
             <button
               onClick={downloadAllProtocolsJSON}
               disabled={loading || !startDate || !endDate}

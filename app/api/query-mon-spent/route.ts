@@ -37,6 +37,7 @@ interface QueryParams {
   startDate: string;
   endDate: string;
   token?: string;
+  noCache?: boolean; // Skip cache lookup if true
 }
 
 /**
@@ -53,25 +54,30 @@ async function fetchFromMerkl(url: string): Promise<any> {
 /**
  * Fetch campaigns for a protocol (with caching)
  * @param endDate - Optional end date to determine if this is historical data
+ * @param noCache - Skip cache lookup if true
  */
-async function fetchCampaigns(protocolId: string, endDate?: string): Promise<Campaign[]> {
+async function fetchCampaigns(protocolId: string, endDate?: string, noCache?: boolean): Promise<Campaign[]> {
   const campaigns: Campaign[] = [];
   let page = 0;
   let hasMore = true;
 
   while (hasMore) {
     try {
-      // Check cache first
-      const cached = await getCachedMerklCampaigns(protocolId, page);
-      if (cached && cached.length > 0) {
-        console.log(`Cache hit for campaigns: ${protocolId} page ${page}`);
-        campaigns.push(...cached);
-        if (cached.length < 100) {
-          hasMore = false;
-        } else {
-          page++;
+      // Check cache first (unless noCache is true)
+      if (!noCache) {
+        const cached = await getCachedMerklCampaigns(protocolId, page);
+        if (cached && cached.length > 0) {
+          console.log(`Cache hit for campaigns: ${protocolId} page ${page}`);
+          campaigns.push(...cached);
+          if (cached.length < 100) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+          continue;
         }
-        continue;
+      } else {
+        console.log(`[noCache] Bypassing cache for campaigns: ${protocolId} page ${page}`);
       }
 
       // Cache miss - fetch from API
@@ -334,7 +340,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { protocols, startDate, endDate, token = 'WMON' } = body;
+    const { protocols, startDate, endDate, token = 'WMON', noCache = false } = body;
 
     // Validate inputs
     if (!protocols || protocols.length === 0) {
@@ -373,10 +379,10 @@ export async function POST(request: NextRequest) {
     let allCampaigns: Campaign[] = [];
 
     if (protocols.length === 1 && protocols[0] === 'all') {
-      allCampaigns = await fetchCampaigns('all', endDate);
+      allCampaigns = await fetchCampaigns('all', endDate, noCache);
     } else {
       for (const protocol of protocols) {
-        const protocolCampaigns = await fetchCampaigns(protocol, endDate);
+        const protocolCampaigns = await fetchCampaigns(protocol, endDate, noCache);
         allCampaigns.push(...protocolCampaigns);
         await new Promise(resolve => setTimeout(resolve, 100));
       }
