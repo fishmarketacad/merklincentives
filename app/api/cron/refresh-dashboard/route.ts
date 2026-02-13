@@ -374,6 +374,7 @@ export async function GET(request: NextRequest) {
             startDate: sevenDaysAgo,
             endDate: yesterday,
             token: 'WMON',
+            noCache: true, // Always fetch fresh data in cron job
           }),
         }, 90000), // 90 second timeout (Redis retries can cause delays)
         fetchWithTimeout(tvlUrl, {
@@ -430,6 +431,7 @@ export async function GET(request: NextRequest) {
             startDate: prevStartDate,
             endDate: prevEndDate,
             token: 'WMON',
+            noCache: true, // Always fetch fresh data in cron job
           }),
         }, 90000), // 90 second timeout (Redis retries can cause delays)
         fetchWithTimeout(prevTvlUrl, {
