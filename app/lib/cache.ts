@@ -324,6 +324,63 @@ export async function getCachedEpochData(
 }
 
 /**
+ * Clear all Merkl campaign caches
+ * Useful when new protocols/campaigns are added and cache has stale data
+ */
+export async function clearMerklCampaignCaches(): Promise<{ cleared: number; error?: string }> {
+  try {
+    const client = getRedisClient();
+    if (!client) {
+      return { cleared: 0, error: 'Redis not available' };
+    }
+
+    // Get all keys matching merkl:campaigns:*
+    const keys = await client.keys('merkl:campaigns:*');
+
+    if (keys.length === 0) {
+      return { cleared: 0 };
+    }
+
+    // Delete all matching keys
+    await client.del(...keys);
+    console.log(`[Cache] Cleared ${keys.length} Merkl campaign cache entries`);
+
+    return { cleared: keys.length };
+  } catch (error: any) {
+    console.error('[Cache] Failed to clear Merkl caches:', error);
+    return { cleared: 0, error: error.message };
+  }
+}
+
+/**
+ * Clear all caches (nuclear option)
+ */
+export async function clearAllCaches(): Promise<{ cleared: number; error?: string }> {
+  try {
+    const client = getRedisClient();
+    if (!client) {
+      return { cleared: 0, error: 'Redis not available' };
+    }
+
+    // Get all keys
+    const keys = await client.keys('*');
+
+    if (keys.length === 0) {
+      return { cleared: 0 };
+    }
+
+    // Delete all keys
+    await client.del(...keys);
+    console.log(`[Cache] Cleared ALL ${keys.length} cache entries`);
+
+    return { cleared: keys.length };
+  } catch (error: any) {
+    console.error('[Cache] Failed to clear all caches:', error);
+    return { cleared: 0, error: error.message };
+  }
+}
+
+/**
  * Dynamic epochs stored in Redis
  * These are auto-generated epochs that extend beyond the hardcoded list
  */
