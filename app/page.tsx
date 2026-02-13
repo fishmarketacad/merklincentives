@@ -147,6 +147,7 @@ function HomeContent() {
   const [aiInputData, setAiInputData] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
+  const [aiEnabled, setAiEnabled] = useState(false); // AI analysis disabled by default
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' | null }>({ key: null, direction: null });
   const [isAutoLoading, setIsAutoLoading] = useState(false);
   const [enhancedCsvLoading, setEnhancedCsvLoading] = useState(false);
@@ -1681,8 +1682,8 @@ function HomeContent() {
     } finally {
       setLoading(false);
 
-      // If this was an auto-run query and it succeeded, trigger AI analysis
-      if (autoRun && querySucceeded) {
+      // If this was an auto-run query and it succeeded, trigger AI analysis (only if enabled)
+      if (autoRun && querySucceeded && aiEnabled) {
         setIsAutoLoading(false);
         // Add a small delay to ensure results state is updated
         setTimeout(() => {
@@ -1690,6 +1691,8 @@ function HomeContent() {
             console.error('Auto AI analysis failed:', err);
           });
         }, 100);
+      } else if (autoRun) {
+        setIsAutoLoading(false);
       }
     }
   };
@@ -3266,10 +3269,20 @@ ${JSON.stringify(fullInputData, null, 2)}
                     </span>
                 </div>
               </div>
-              <div className="flex gap-3">
+              <div className="flex gap-3 items-center">
+                {/* AI Analysis Checkbox */}
+                <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={aiEnabled}
+                    onChange={(e) => setAiEnabled(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-purple-600 focus:ring-purple-500 focus:ring-offset-gray-800 cursor-pointer"
+                  />
+                  <span className="text-sm">Enable AI</span>
+                </label>
                 <button
                   onClick={() => handleAIAnalysis()}
-                  disabled={aiLoading || results.length === 0}
+                  disabled={aiLoading || results.length === 0 || !aiEnabled}
                   className="px-5 py-2.5 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-500 transition-all shadow-lg hover:shadow-purple-500/50 transform hover:scale-105 active:scale-95 flex items-center gap-2 disabled:from-gray-700 disabled:to-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {aiLoading ? (
