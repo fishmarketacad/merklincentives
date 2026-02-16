@@ -207,6 +207,9 @@ function HomeContent() {
   // Read URL parameters on mount and handle auto-initialization
   useEffect(() => {
     const initializeDashboard = async () => {
+      // Skip re-initialization if already initialized (prevents URL sync from resetting state)
+      if (isInitialized) return;
+
       const urlProtocols = searchParams.get('protocols');
       const urlStartDate = searchParams.get('startDate');
       const urlEndDate = searchParams.get('endDate');
