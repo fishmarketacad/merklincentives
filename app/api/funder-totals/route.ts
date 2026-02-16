@@ -50,56 +50,57 @@ export async function GET(request: NextRequest) {
     // Aggregate by funder - use mainProtocolId or creator tags
     const funderTotals: Record<string, number> = {};
 
-    // Process campaigns in parallel batches for speed
-    const batchSize = 10;
-    for (let i = 0; i < relevantCampaigns.length; i += batchSize) {
-      const batch = relevantCampaigns.slice(i, i + batchSize);
+    // Process ALL campaigns in parallel (max concurrency)
+    const results = await Promise.all(relevantCampaigns.map(async (campaign) => {
+      const campaignId = campaign.id || campaign.campaignId;
+      if (!campaignId) return null;
 
-      await Promise.all(batch.map(async (campaign) => {
-        const campaignId = campaign.id || campaign.campaignId;
-        if (!campaignId) return;
+      try {
+        // Fetch details and metrics in parallel
+        const [detailsRes, metricsRes] = await Promise.all([
+          fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}`),
+          fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}/metrics`)
+        ]);
 
-        try {
-          // Get funder ID from campaign
-          let funderId = campaign.mainProtocolId?.toLowerCase() || 'unknown';
-
-          // Try to get more accurate funder from details
-          const detailsRes = await fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}`);
-          if (detailsRes.ok) {
-            const details = await detailsRes.json();
-            if (details.protocol?.id) {
-              funderId = details.protocol.id.toLowerCase();
-            }
+        // Get funder ID
+        let funderId = campaign.mainProtocolId?.toLowerCase() || 'unknown';
+        if (detailsRes.ok) {
+          const details = await detailsRes.json();
+          if (details.protocol?.id) {
+            funderId = details.protocol.id.toLowerCase();
           }
-
-          // Get metrics for MON calculation
-          const metricsRes = await fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}/metrics`);
-          if (!metricsRes.ok) return;
-
-          const metrics = await metricsRes.json();
-          const tokenPrice = parseFloat(campaign.rewardToken?.price || '0');
-
-          if (tokenPrice <= 0 || !metrics.dailyRewardsRecords) return;
-
-          // Sum MON from daily rewards in date range
-          let totalMON = 0;
-          for (const record of metrics.dailyRewardsRecords) {
-            const timestamp = parseInt(record.timestamp) * 1000;
-            if (timestamp >= startTimestamp && timestamp <= endTimestamp) {
-              const usdValue = parseFloat(record.total || '0');
-              if (usdValue > 0) {
-                totalMON += usdValue / tokenPrice;
-              }
-            }
-          }
-
-          if (totalMON > 0) {
-            funderTotals[funderId] = (funderTotals[funderId] || 0) + totalMON;
-          }
-        } catch (e) {
-          // Skip failed campaigns
         }
-      }));
+
+        // Get metrics
+        if (!metricsRes.ok) return null;
+        const metrics = await metricsRes.json();
+        const tokenPrice = parseFloat(campaign.rewardToken?.price || '0');
+
+        if (tokenPrice <= 0 || !metrics.dailyRewardsRecords) return null;
+
+        // Sum MON from daily rewards in date range
+        let totalMON = 0;
+        for (const record of metrics.dailyRewardsRecords) {
+          const timestamp = parseInt(record.timestamp) * 1000;
+          if (timestamp >= startTimestamp && timestamp <= endTimestamp) {
+            const usdValue = parseFloat(record.total || '0');
+            if (usdValue > 0) {
+              totalMON += usdValue / tokenPrice;
+            }
+          }
+        }
+
+        return totalMON > 0 ? { funderId, totalMON } : null;
+      } catch (e) {
+        return null;
+      }
+    }));
+
+    // Aggregate results
+    for (const result of results) {
+      if (result) {
+        funderTotals[result.funderId] = (funderTotals[result.funderId] || 0) + result.totalMON;
+      }
     }
 
     return NextResponse.json({
