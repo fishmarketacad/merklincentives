@@ -50,6 +50,9 @@ export async function GET(request: NextRequest) {
     // Aggregate by funder - use mainProtocolId or creator tags
     const funderTotals: Record<string, number> = {};
 
+    // Log first few campaigns to debug structure
+    console.log('[Funder Totals] Sample campaign:', JSON.stringify(relevantCampaigns[0], null, 2));
+
     // Process ALL campaigns in parallel (max concurrency)
     const results = await Promise.all(relevantCampaigns.map(async (campaign) => {
       const campaignId = campaign.id || campaign.campaignId;
@@ -62,12 +65,31 @@ export async function GET(request: NextRequest) {
           fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}/metrics`)
         ]);
 
-        // Get funder ID
-        let funderId = campaign.mainProtocolId?.toLowerCase() || 'unknown';
+        // Get funder ID - try multiple sources
+        let funderId = 'unknown';
+
+        // Try details.protocol.id first (most accurate)
         if (detailsRes.ok) {
           const details = await detailsRes.json();
           if (details.protocol?.id) {
             funderId = details.protocol.id.toLowerCase();
+          } else if (details.mainProtocolId) {
+            funderId = details.mainProtocolId.toLowerCase();
+          }
+          // Log first campaign details for debugging
+          if (campaignId === relevantCampaigns[0]?.id) {
+            console.log('[Funder Totals] Sample details:', JSON.stringify(details, null, 2).substring(0, 1000));
+          }
+        }
+
+        // Fallback to campaign-level fields
+        if (funderId === 'unknown') {
+          if (campaign.mainProtocolId) {
+            funderId = campaign.mainProtocolId.toLowerCase();
+          } else if (campaign.protocol?.id) {
+            funderId = campaign.protocol.id.toLowerCase();
+          } else if (campaign.creator?.tags?.[0]) {
+            funderId = campaign.creator.tags[0].toLowerCase();
           }
         }
 
