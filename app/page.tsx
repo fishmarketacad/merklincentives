@@ -149,7 +149,6 @@ function HomeContent() {
   const [aiError, setAiError] = useState('');
   const [aiEnabled, setAiEnabled] = useState(false); // AI analysis disabled by default
   const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' | null }>({ key: null, direction: null });
-  const [isAutoLoading, setIsAutoLoading] = useState(false);
   const [enhancedCsvLoading, setEnhancedCsvLoading] = useState(false);
 
   // Memoized computed values
@@ -289,16 +288,14 @@ function HomeContent() {
               setPreviousWeekMarketVolumes(localCache!.previousWeekMarketVolumes);
               setAiAnalysis(localCache!.aiAnalysis);
             } else {
-              // No cache at all - trigger fresh fetch
-              console.log('[Init] No cache available, triggering fresh fetch');
+              // No cache at all - set defaults, user can manually query
+              console.log('[Init] No cache available, setting defaults');
               setStartDate(sevenDaysAgo);
               setEndDate(yesterday);
               setProtocols([]);
 
               const price = await fetchMonPrice();
               setMonPrice(price);
-
-              setIsAutoLoading(true);
             }
           }
         } catch (error) {
@@ -331,8 +328,6 @@ function HomeContent() {
 
             const price = await fetchMonPrice();
             setMonPrice(price);
-
-            setIsAutoLoading(true);
           }
         }
       }
@@ -748,13 +743,6 @@ function HomeContent() {
       router.replace(newURL, { scroll: false });
     }
   }, [urlParams, isInitialized, router, startDate, endDate, protocols]);
-
-  // Auto-run query when isAutoLoading is true
-  useEffect(() => {
-    if (isAutoLoading && isInitialized && protocols.length > 0 && startDate && endDate) {
-      handleQuery(true);
-    }
-  }, [isAutoLoading, isInitialized, protocols.length, startDate, endDate]);
 
   // Save dashboard cache after data is loaded (when results and AI analysis are set)
   useEffect(() => {
@@ -1351,13 +1339,11 @@ function HomeContent() {
   const handleQuery = async (autoRun = false, forceRefresh = false) => {
     if (protocols.length === 0) {
       setError('Please select at least one protocol');
-      if (autoRun) setIsAutoLoading(false);
       return;
     }
 
     if (!startDate || !endDate) {
       setError('Please select both start and end dates');
-      if (autoRun) setIsAutoLoading(false);
       return;
     }
 
@@ -1678,21 +1664,17 @@ function HomeContent() {
       querySucceeded = true;
     } catch (err: any) {
       setError(err.message || 'An error occurred');
-      if (autoRun) setIsAutoLoading(false);
     } finally {
       setLoading(false);
 
       // If this was an auto-run query and it succeeded, trigger AI analysis (only if enabled)
       if (autoRun && querySucceeded && aiEnabled) {
-        setIsAutoLoading(false);
         // Add a small delay to ensure results state is updated
         setTimeout(() => {
           handleAIAnalysis(true).catch((err) => {
             console.error('Auto AI analysis failed:', err);
           });
         }, 100);
-      } else if (autoRun) {
-        setIsAutoLoading(false);
       }
     }
   };
@@ -3070,17 +3052,6 @@ ${JSON.stringify(fullInputData, null, 2)}
             Query MON incentives spent across protocols on Monad
           </p>
         </div>
-
-        {/* Auto-Loading Indicator */}
-        {isAutoLoading && (
-          <div className="mb-4 p-4 bg-purple-900/30 border-2 border-purple-500/50 rounded-lg flex items-center gap-3 animate-pulse">
-            <svg className="animate-spin h-5 w-5 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span className="text-purple-300 font-semibold">Auto-loading dashboard...</span>
-          </div>
-        )}
 
         <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-700/50 p-6 mb-4">
           {/* Date Range and MON Price - Single Row */}
