@@ -30,13 +30,33 @@ export interface Week {
 // NOTE: Using 2026 dates to match the Merkl API data
 const HARDCODED_EPOCHS: Epoch[] = [
   {
+    id: '6b',
+    name: 'Epoch 6b Week 12',
+    startDate: '2026-02-09',
+    endDate: '2026-02-16',
+    snapshotDate: '2026-02-17',
+    monTwap: 0,
+    monTwapChange: 'TBD',
+    isGenerated: true,
+  },
+  {
+    id: '6',
+    name: 'Epoch 6 Week 11',
+    startDate: '2026-02-02',
+    endDate: '2026-02-09',
+    snapshotDate: '2026-02-10',
+    monTwap: 0,
+    monTwapChange: 'TBD',
+    isGenerated: true,
+  },
+  {
     id: '5',
     name: 'Epoch 5 Week 10',
     startDate: '2026-01-26',
     endDate: '2026-02-02',
     snapshotDate: '2026-02-03',
     monTwap: 0,
-    monTwapChange: '',
+    monTwapChange: 'TBD',
     isGenerated: true,
   },
   {
