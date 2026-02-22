@@ -436,3 +436,181 @@ export async function updateDynamicEpoch(epochId: string, updates: Partial<Dynam
     await saveDynamicEpochs(existing);
   }
 }
+
+// ============================================
+// Daily Index Cache
+// ============================================
+
+const DAILY_INDEX_TTL = 60 * 60 * 24 * 30; // 30 days - historical data never changes
+
+/**
+ * Daily index data types
+ */
+export interface DailyPoolData {
+  protocol: string;
+  pool: string;
+  tvl: number | null;
+  volume: number | null;
+  monQuantity: number;
+  monValueUSD: number;
+  externalIncentiveUSD: number;
+  funder: string | null;
+}
+
+export interface DailyProtocolData {
+  tvl: number | null;
+  volume: number | null;
+  monSpent: number;
+  monValueUSD: number;
+  externalIncentiveUSD: number;
+  isMonadSpecific: boolean;
+  poolCount: number;
+}
+
+export interface DailyFunderData {
+  tvl: number | null;
+  monSpent: number;
+  monValueUSD: number;
+  externalIncentiveUSD: number;
+  poolCount: number;
+  protocols: string[]; // List of protocols funded
+}
+
+export interface DailyMarketData {
+  volume: number | null;
+  volumeSource: 'dune' | 'defillama' | null;
+  isMonadSpecific: boolean;
+}
+
+export interface DailyMeta {
+  monPrice: number | null;
+  monPriceSource: 'cache' | 'coingecko' | 'defillama' | null;
+  fetchedAt: string;
+  version: number; // Schema version for future migrations
+}
+
+export interface DailyIndex {
+  date: string;
+  pools: DailyPoolData[];
+  protocols: Record<string, DailyProtocolData>;
+  funders: Record<string, DailyFunderData>;
+  markets: Record<string, DailyMarketData>;
+  meta: DailyMeta;
+}
+
+/**
+ * Daily index cache keys
+ */
+export const DailyIndexKeys = {
+  pools: (date: string) => `daily:${date}:pools`,
+  protocols: (date: string) => `daily:${date}:protocols`,
+  funders: (date: string) => `daily:${date}:funders`,
+  markets: (date: string) => `daily:${date}:markets`,
+  meta: (date: string) => `daily:${date}:meta`,
+  // Convenience key for checking if a date is indexed
+  indexed: (date: string) => `daily:${date}:indexed`,
+};
+
+/**
+ * Save daily index data
+ */
+export async function saveDailyIndex(data: DailyIndex): Promise<void> {
+  const { date, pools, protocols, funders, markets, meta } = data;
+
+  // Save each component with its own key
+  await Promise.all([
+    setCache(DailyIndexKeys.pools(date), pools, DAILY_INDEX_TTL),
+    setCache(DailyIndexKeys.protocols(date), protocols, DAILY_INDEX_TTL),
+    setCache(DailyIndexKeys.funders(date), funders, DAILY_INDEX_TTL),
+    setCache(DailyIndexKeys.markets(date), markets, DAILY_INDEX_TTL),
+    setCache(DailyIndexKeys.meta(date), meta, DAILY_INDEX_TTL),
+    // Mark date as indexed
+    setCache(DailyIndexKeys.indexed(date), true, DAILY_INDEX_TTL),
+  ]);
+
+  console.log(`[DailyIndex] Saved index for ${date}: ${pools.length} pools, ${Object.keys(protocols).length} protocols, ${Object.keys(funders).length} funders`);
+}
+
+/**
+ * Get daily index data for a specific date
+ */
+export async function getDailyIndex(date: string): Promise<DailyIndex | null> {
+  // Check if date is indexed
+  const isIndexed = await getCache<boolean>(DailyIndexKeys.indexed(date));
+  if (!isIndexed) {
+    return null;
+  }
+
+  // Fetch all components in parallel
+  const [pools, protocols, funders, markets, meta] = await Promise.all([
+    getCache<DailyPoolData[]>(DailyIndexKeys.pools(date)),
+    getCache<Record<string, DailyProtocolData>>(DailyIndexKeys.protocols(date)),
+    getCache<Record<string, DailyFunderData>>(DailyIndexKeys.funders(date)),
+    getCache<Record<string, DailyMarketData>>(DailyIndexKeys.markets(date)),
+    getCache<DailyMeta>(DailyIndexKeys.meta(date)),
+  ]);
+
+  if (!pools || !protocols || !funders || !markets || !meta) {
+    console.warn(`[DailyIndex] Partial data for ${date}, returning null`);
+    return null;
+  }
+
+  return { date, pools, protocols, funders, markets, meta };
+}
+
+/**
+ * Get just the pools for a date (lighter weight)
+ */
+export async function getDailyPools(date: string): Promise<DailyPoolData[] | null> {
+  return getCache<DailyPoolData[]>(DailyIndexKeys.pools(date));
+}
+
+/**
+ * Get just the protocols for a date (lighter weight)
+ */
+export async function getDailyProtocols(date: string): Promise<Record<string, DailyProtocolData> | null> {
+  return getCache<Record<string, DailyProtocolData>>(DailyIndexKeys.protocols(date));
+}
+
+/**
+ * Get just the funders for a date (lighter weight)
+ */
+export async function getDailyFunders(date: string): Promise<Record<string, DailyFunderData> | null> {
+  return getCache<Record<string, DailyFunderData>>(DailyIndexKeys.funders(date));
+}
+
+/**
+ * Get just the meta for a date (lightweight check)
+ */
+export async function getDailyMeta(date: string): Promise<DailyMeta | null> {
+  return getCache<DailyMeta>(DailyIndexKeys.meta(date));
+}
+
+/**
+ * Check if a date is indexed
+ */
+export async function isDateIndexed(date: string): Promise<boolean> {
+  const indexed = await getCache<boolean>(DailyIndexKeys.indexed(date));
+  return indexed === true;
+}
+
+/**
+ * Get list of indexed dates (for debugging/admin)
+ */
+export async function getIndexedDates(): Promise<string[]> {
+  try {
+    const client = getRedisClient();
+    if (!client) return [];
+
+    const keys = await client.keys('daily:*:indexed');
+    return keys.map(key => {
+      const match = key.match(/daily:(\d{4}-\d{2}-\d{2}):indexed/);
+      return match ? match[1] : null;
+    }).filter((date): date is string => date !== null).sort().reverse();
+  } catch (error) {
+    console.error('[DailyIndex] Error getting indexed dates:', error);
+    return [];
+  }
+}
+
+// Note: getRedisClient is defined at the top of this file and reused here

@@ -28,6 +28,7 @@ const PROTOCOL_SLUG_MAP: Record<string, string> = {
   'curve': 'curve-dex', // DeFiLlama uses "curve-dex" slug
   'lfj': 'lfj', // LFJ DEX
   'wlfi': 'wlfi', // WLFI - appears as funding protocol only
+  'neverland': 'neverland', // Neverland lending protocol (Monad-native)
 };
 
 // Map protocols to Dune query IDs

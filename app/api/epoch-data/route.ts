@@ -32,7 +32,8 @@ export interface EpochData {
 const TVL_PROTOCOLS = [
   'clober', 'curvance', 'gearbox', 'kuru', 'morpho', 'euler',
   'pancake-swap', 'uniswap', 'monday-trade', 'renzo', 'upshift',
-  'townsquare', 'Beefy', 'accountable', 'curve', 'lfj', 'wlfi'
+  'townsquare', 'Beefy', 'accountable', 'curve', 'lfj', 'wlfi',
+  'neverland'
 ];
 
 // For Merkl incentives queries - use 'all' to get all campaigns (avoids case-sensitivity issues)
@@ -77,10 +78,6 @@ export async function GET(request: NextRequest) {
         name: e.name,
         startDate: e.startDate,
         endDate: e.endDate,
-        snapshotDate: e.snapshotDate,
-        monTwap: e.monTwap,
-        monTwapChange: e.monTwapChange,
-        isGenerated: e.isGenerated,
       }))
     });
   }
@@ -200,7 +197,7 @@ async function fetchEpochData(epoch: Epoch, baseUrl: string): Promise<EpochData>
   // Fetch Uniswap V4 pool-level TVL from The Graph
   let uniswapPoolTvl: Record<string, number> = {};
   try {
-    const uniswapResponse = await fetch(`${baseUrl}/api/uniswap-tvl?date=${epoch.snapshotDate}`, {
+    const uniswapResponse = await fetch(`${baseUrl}/api/uniswap-tvl?date=${epoch.endDate}`, {
       cache: 'no-store',
     });
     if (uniswapResponse.ok) {
