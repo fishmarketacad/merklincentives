@@ -136,3 +136,4 @@ npm run lint     # Run ESLint
 | `UPSTASH_REDIS_REST_TOKEN` | Redis auth token |
 | `DUNE_API_KEY` | Dune Analytics API key |
 | `THEGRAPH_API_KEY` | (Optional) Uniswap subgraph |
+// Force redeploy Sat Feb 21 21:40:36 EST 2026
