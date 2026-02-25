@@ -801,6 +801,7 @@ function HomeContent() {
     'curve',
     'lfj', // LFJ DEX - shows TVL/Volume even without Merkl incentives
     'wlfi', // WLFI - appears as funding protocol only
+    'neverland',
   ];
 
   const toggleProtocol = (protocol: string) => {
@@ -1849,6 +1850,7 @@ function HomeContent() {
         'curve',
         'lfj',
         'wlfi',
+        'neverland',
       ];
 
       // Fetch all protocols data
