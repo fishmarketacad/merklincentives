@@ -50,22 +50,17 @@ export async function GET(request: NextRequest) {
     // Aggregate by funder - use mainProtocolId or creator tags
     const funderTotals: Record<string, number> = {};
 
-    // Process ALL campaigns in parallel (max concurrency)
-    const results = await Promise.all(relevantCampaigns.map(async (campaign) => {
+    // Process campaigns in batches to avoid timeout
+    const BATCH_SIZE = 50;
+    const BATCH_DELAY_MS = 100;
+
+    async function processCampaign(campaign: any): Promise<{ funderId: string; totalMON: number } | null> {
       const campaignId = campaign.id || campaign.campaignId;
       if (!campaignId) return null;
 
       try {
-        // Fetch details and metrics in parallel
-        const [detailsRes, metricsRes] = await Promise.all([
-          fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}`),
-          fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}/metrics`)
-        ]);
-
-        // Get funder ID - creator.creatorId is most reliable
+        // Get funder ID from campaign data first (no fetch needed)
         let funderId = 'unknown';
-
-        // Check campaign-level creator info first (most reliable)
         if (campaign.creator?.creatorId) {
           funderId = campaign.creator.creatorId.toLowerCase();
         } else if (campaign.creator?.tags?.[0]) {
@@ -76,20 +71,10 @@ export async function GET(request: NextRequest) {
           funderId = campaign.protocol.id.toLowerCase();
         }
 
-        // Try details as fallback
-        if (funderId === 'unknown' && detailsRes.ok) {
-          const details = await detailsRes.json();
-          if (details.creator?.creatorId) {
-            funderId = details.creator.creatorId.toLowerCase();
-          } else if (details.creator?.tags?.[0]) {
-            funderId = details.creator.tags[0].toLowerCase();
-          } else if (details.protocol?.id) {
-            funderId = details.protocol.id.toLowerCase();
-          }
-        }
-
-        // Get metrics
+        // Only fetch metrics (skip details fetch since we have funder from campaign)
+        const metricsRes = await fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}/metrics`);
         if (!metricsRes.ok) return null;
+
         const metrics = await metricsRes.json();
         const tokenPrice = parseFloat(campaign.rewardToken?.price || '0');
 
@@ -111,12 +96,23 @@ export async function GET(request: NextRequest) {
       } catch (e) {
         return null;
       }
-    }));
+    }
 
-    // Aggregate results
-    for (const result of results) {
-      if (result) {
-        funderTotals[result.funderId] = (funderTotals[result.funderId] || 0) + result.totalMON;
+    // Process in batches
+    for (let i = 0; i < relevantCampaigns.length; i += BATCH_SIZE) {
+      const batch = relevantCampaigns.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(processCampaign));
+
+      // Aggregate batch results immediately
+      for (const result of batchResults) {
+        if (result) {
+          funderTotals[result.funderId] = (funderTotals[result.funderId] || 0) + result.totalMON;
+        }
+      }
+
+      // Small delay between batches to avoid rate limiting
+      if (i + BATCH_SIZE < relevantCampaigns.length) {
+        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
       }
     }
 
