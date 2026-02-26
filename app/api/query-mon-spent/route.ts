@@ -430,170 +430,182 @@ export async function POST(request: NextRequest) {
 
     const platformData: Record<string, PlatformData> = {};
 
-    for (const campaign of relevantCampaigns) {
+    // Process campaigns in batches to avoid timeout
+    const BATCH_SIZE = 50;
+    const BATCH_DELAY_MS = 100;
+
+    interface CampaignResult {
+      platformProtocolId: string;
+      fundingProtocolId: string;
+      marketName: string;
+      totalMON: number;
+      externalUSD: number;
+      marketAPR?: number;
+      marketTVL?: number;
+      merklUrl?: string;
+    }
+
+    async function processCampaign(campaign: any): Promise<CampaignResult | null> {
       const campaignId = campaign.id || campaign.campaignId;
-      if (!campaignId) continue;
+      if (!campaignId) return null;
 
-      // Get campaign details to determine funding protocol (cached)
-      const campaignDetails = await fetchCampaignDetails(String(campaignId), isHistorical);
-      
-      // Determine funding protocol (who paid for the campaign)
-      let fundingProtocolId = 'unknown';
-      if (campaignDetails?.protocol?.id) {
-        fundingProtocolId = campaignDetails.protocol.id;
-      } else if (campaign.mainProtocolId) {
-        fundingProtocolId = campaign.mainProtocolId;
-      } else if (campaign.creator?.tags && campaign.creator.tags.length > 0) {
-        fundingProtocolId = campaign.creator.tags[0];
-      }
-
-      // Determine platform protocol (where the campaign runs) and get market name + APR + TVL + URL
-      // Always fetch opportunity to get protocol info (Merkl API no longer supports mainProtocolId filtering)
-      let platformProtocolId = 'unknown';
-      let marketName = 'Unknown Market';
-      let marketAPR: number | undefined = undefined;
-      let marketTVL: number | undefined = undefined;
-      let merklUrl: string | undefined = undefined;
-      let opportunityId: string | undefined = campaign.opportunityId;
-      let opportunityData: any = null;
-
-      if (campaign.opportunityId) {
-        try {
-          opportunityData = await fetchOpportunity(String(campaign.opportunityId), isHistorical);
-          platformProtocolId = opportunityData?.protocol?.id || fundingProtocolId;
-          marketName = opportunityData?.name || `Market ${campaign.opportunityId}`;
-          marketAPR = opportunityData?.apr !== undefined ? parseFloat(String(opportunityData.apr)) : undefined;
-          // Get TVL from opportunity as initial value (will be overridden by campaign metrics if available)
-          if (opportunityData?.tvl !== undefined && opportunityData.tvl > 0) {
-            marketTVL = parseFloat(String(opportunityData.tvl));
-          }
-          // Generate Merkl search page URL with protocol search
-          // Using search page instead of direct opportunity links due to URL case sensitivity issues
-          if (opportunityData?.chain?.name && opportunityData?.protocol?.id) {
-            const chainName = opportunityData.chain.name.toLowerCase();
-            const protocolId = opportunityData.protocol.id;
-            merklUrl = `https://app.merkl.xyz/chains/${chainName}?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
-          }
-        } catch (e) {
-          platformProtocolId = fundingProtocolId;
-          marketName = `Market ${campaign.opportunityId}`;
+      try {
+        // Get funder from campaign data first (avoid unnecessary fetch)
+        let fundingProtocolId = 'unknown';
+        if (campaign.creator?.creatorId) {
+          fundingProtocolId = campaign.creator.creatorId;
+        } else if (campaign.creator?.tags && campaign.creator.tags.length > 0) {
+          fundingProtocolId = campaign.creator.tags[0];
+        } else if (campaign.mainProtocolId) {
+          fundingProtocolId = campaign.mainProtocolId;
         }
-      } else {
-        platformProtocolId = fundingProtocolId;
-      }
 
-      const rewardToken = campaignDetails?.rewardToken || campaign.rewardToken;
-      const metrics = await fetchCampaignMetrics(String(campaignId), isHistorical);
+        // Fetch opportunity and metrics in parallel
+        const [opportunityData, metrics] = await Promise.all([
+          campaign.opportunityId ? fetchOpportunity(String(campaign.opportunityId), isHistorical) : null,
+          fetchCampaignMetrics(String(campaignId), isHistorical)
+        ]);
 
-      // Determine if this is a MON token or external token
-      const tokenSymbol = rewardToken?.symbol || '';
-      const isMonToken = monTokenSymbols.includes(tokenSymbol);
+        // Determine platform protocol
+        let platformProtocolId = opportunityData?.protocol?.id || fundingProtocolId;
+        let marketName = opportunityData?.name || `Market ${campaign.opportunityId || campaignId}`;
+        let marketAPR = opportunityData?.apr !== undefined ? parseFloat(String(opportunityData.apr)) : undefined;
+        let marketTVL = opportunityData?.tvl !== undefined && opportunityData.tvl > 0
+          ? parseFloat(String(opportunityData.tvl)) : undefined;
+        let merklUrl: string | undefined;
 
-      let totalMON = 0;
-      let externalUSD = 0;
+        if (opportunityData?.chain?.name && opportunityData?.protocol?.id) {
+          const chainName = opportunityData.chain.name.toLowerCase();
+          const protocolId = opportunityData.protocol.id;
+          merklUrl = `https://app.merkl.xyz/chains/${chainName}?search=${encodeURIComponent(protocolId)}&status=LIVE%2CSOON%2CPAST`;
+        }
 
-      if (isMonToken) {
-        // Calculate MON spent for MON-based tokens
-        const result = calculateTotalMONSpent(
-          metrics.dailyRewardsRecords || [],
-          rewardToken,
-          startTimestamp,
-          endTimestamp
-        );
-        totalMON = result.totalMON;
-      } else {
-        // Calculate USD value for external tokens (non-MON incentives like AUSD)
-        externalUSD = calculateExternalIncentiveUSD(
-          metrics.dailyRewardsRecords || [],
-          startTimestamp,
-          endTimestamp
-        );
-      }
+        const rewardToken = campaign.rewardToken;
+        const tokenSymbol = rewardToken?.symbol || '';
+        const isMonToken = monTokenSymbols.includes(tokenSymbol);
 
-      // Try to get APR and TVL at the end of the date range from campaign metrics
-      // This is more accurate than current opportunity data for historical queries
-      const aprAtEndDate = getAPRAtDate(metrics.aprRecords || [], endTimestamp);
-      if (aprAtEndDate !== undefined) {
-        marketAPR = aprAtEndDate;
-      }
+        let totalMON = 0;
+        let externalUSD = 0;
 
-      const tvlAtEndDate = getTVLAtDate(metrics.tvlRecords || [], endTimestamp);
-      if (tvlAtEndDate !== undefined && tvlAtEndDate > 0) {
-        // Use TVL from campaign metrics (more accurate for historical queries)
-        marketTVL = tvlAtEndDate;
-      } else if (marketTVL === undefined && opportunityData?.tvl !== undefined && opportunityData.tvl > 0) {
-        // Fallback to opportunity TVL if campaign metrics don't have TVL at end date
-        // This can happen for active campaigns that haven't ended yet
-        marketTVL = parseFloat(String(opportunityData.tvl));
-      }
+        if (isMonToken) {
+          const result = calculateTotalMONSpent(
+            metrics.dailyRewardsRecords || [],
+            rewardToken,
+            startTimestamp,
+            endTimestamp
+          );
+          totalMON = result.totalMON;
+        } else {
+          externalUSD = calculateExternalIncentiveUSD(
+            metrics.dailyRewardsRecords || [],
+            startTimestamp,
+            endTimestamp
+          );
+        }
 
-      // Skip if no incentives at all
-      if (totalMON <= 0 && externalUSD <= 0) continue;
+        // Get APR and TVL at end date from metrics
+        const aprAtEndDate = getAPRAtDate(metrics.aprRecords || [], endTimestamp);
+        if (aprAtEndDate !== undefined) {
+          marketAPR = aprAtEndDate;
+        }
 
-      // Initialize platform data structure
-      if (!platformData[platformProtocolId]) {
-        platformData[platformProtocolId] = {
-          platformProtocol: platformProtocolId,
-          fundingProtocols: [],
-          totalMON: 0,
-          externalIncentiveUSD: 0,
-        };
-      }
+        const tvlAtEndDate = getTVLAtDate(metrics.tvlRecords || [], endTimestamp);
+        if (tvlAtEndDate !== undefined && tvlAtEndDate > 0) {
+          marketTVL = tvlAtEndDate;
+        }
 
-      // Find or create funding protocol entry
-      let fundingProtocolData = platformData[platformProtocolId].fundingProtocols.find(
-        fp => fp.fundingProtocol === fundingProtocolId
-      );
+        if (totalMON <= 0 && externalUSD <= 0) return null;
 
-      if (!fundingProtocolData) {
-        fundingProtocolData = {
-          fundingProtocol: fundingProtocolId,
-          markets: [],
-          totalMON: 0,
-          externalIncentiveUSD: 0,
-        };
-        platformData[platformProtocolId].fundingProtocols.push(fundingProtocolData);
-      }
-
-      // Find or create market entry
-      let marketData = fundingProtocolData.markets.find(m => m.marketName === marketName);
-      if (!marketData) {
-        marketData = {
+        return {
+          platformProtocolId,
+          fundingProtocolId,
           marketName,
-          totalMON: 0,
-          externalIncentiveUSD: 0,
-          apr: marketAPR,
-          tvl: marketTVL,
-          merklUrl: merklUrl,
+          totalMON,
+          externalUSD,
+          marketAPR,
+          marketTVL,
+          merklUrl,
         };
-        fundingProtocolData.markets.push(marketData);
-      } else {
-        // Update APR if we have a newer value (keep the highest APR if multiple campaigns)
-        if (marketAPR !== undefined && (marketData.apr === undefined || marketAPR > marketData.apr)) {
-          marketData.apr = marketAPR;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // Process in batches
+    for (let i = 0; i < relevantCampaigns.length; i += BATCH_SIZE) {
+      const batch = relevantCampaigns.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(processCampaign));
+
+      // Aggregate batch results
+      for (const result of batchResults) {
+        if (!result) continue;
+
+        const { platformProtocolId, fundingProtocolId, marketName, totalMON, externalUSD, marketAPR, marketTVL, merklUrl } = result;
+
+        // Initialize platform data structure
+        if (!platformData[platformProtocolId]) {
+          platformData[platformProtocolId] = {
+            platformProtocol: platformProtocolId,
+            fundingProtocols: [],
+            totalMON: 0,
+            externalIncentiveUSD: 0,
+          };
         }
-        // Update TVL if we have a valid value
-        // Always update if current TVL is undefined, or if new TVL is valid and greater
-        if (marketTVL !== undefined && marketTVL > 0) {
-          if (marketData.tvl === undefined || marketTVL > marketData.tvl) {
-            marketData.tvl = marketTVL;
+
+        // Find or create funding protocol entry
+        let fundingProtocolData = platformData[platformProtocolId].fundingProtocols.find(
+          fp => fp.fundingProtocol === fundingProtocolId
+        );
+
+        if (!fundingProtocolData) {
+          fundingProtocolData = {
+            fundingProtocol: fundingProtocolId,
+            markets: [],
+            totalMON: 0,
+            externalIncentiveUSD: 0,
+          };
+          platformData[platformProtocolId].fundingProtocols.push(fundingProtocolData);
+        }
+
+        // Find or create market entry
+        let marketData = fundingProtocolData.markets.find(m => m.marketName === marketName);
+        if (!marketData) {
+          marketData = {
+            marketName,
+            totalMON: 0,
+            externalIncentiveUSD: 0,
+            apr: marketAPR,
+            tvl: marketTVL,
+            merklUrl: merklUrl,
+          };
+          fundingProtocolData.markets.push(marketData);
+        } else {
+          if (marketAPR !== undefined && (marketData.apr === undefined || marketAPR > marketData.apr)) {
+            marketData.apr = marketAPR;
+          }
+          if (marketTVL !== undefined && marketTVL > 0) {
+            if (marketData.tvl === undefined || marketTVL > marketData.tvl) {
+              marketData.tvl = marketTVL;
+            }
+          }
+          if (merklUrl && !marketData.merklUrl) {
+            marketData.merklUrl = merklUrl;
           }
         }
-        // Update URL if not already set
-        if (merklUrl && !marketData.merklUrl) {
-          marketData.merklUrl = merklUrl;
-        }
+
+        // Add to totals
+        marketData.totalMON += totalMON;
+        marketData.externalIncentiveUSD += externalUSD;
+        fundingProtocolData.totalMON += totalMON;
+        fundingProtocolData.externalIncentiveUSD += externalUSD;
+        platformData[platformProtocolId].totalMON += totalMON;
+        platformData[platformProtocolId].externalIncentiveUSD += externalUSD;
       }
 
-      // Add to totals - track MON and external incentives separately
-      marketData.totalMON += totalMON;
-      marketData.externalIncentiveUSD += externalUSD;
-      fundingProtocolData.totalMON += totalMON;
-      fundingProtocolData.externalIncentiveUSD += externalUSD;
-      platformData[platformProtocolId].totalMON += totalMON;
-      platformData[platformProtocolId].externalIncentiveUSD += externalUSD;
-
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Small delay between batches
+      if (i + BATCH_SIZE < relevantCampaigns.length) {
+        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+      }
     }
 
     // Format results for API response
