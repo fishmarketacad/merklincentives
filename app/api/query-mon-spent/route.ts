@@ -264,36 +264,44 @@ function getTVLAtDate(tvlRecords: any[], endTimestamp: number): number | undefin
 }
 
 /**
- * Calculate total MON spent
+ * Calculate total MON spent using pro-rated token amount from campaign
+ * Uses actual token quantity from campaign.amount, pro-rated by overlap with query date range
  */
 function calculateTotalMONSpent(
-  dailyRewardsRecords: any[],
-  rewardToken: any,
-  startTimestamp: number,
-  endTimestamp: number
+  campaign: any,
+  queryStartTimestamp: number,
+  queryEndTimestamp: number
 ) {
-  let totalMON = 0;
-  let totalUSD = 0;
-
-  if (!rewardToken || !rewardToken.price) {
-    return { totalMON: 0, totalUSD: 0 };
+  // Get campaign's total token amount (in wei, 18 decimals)
+  const totalAmountWei = campaign.amount ? BigInt(campaign.amount) : BigInt(0);
+  if (totalAmountWei === BigInt(0)) {
+    return { totalMON: 0 };
   }
 
-  const tokenPrice = parseFloat(rewardToken.price);
+  // Get campaign duration
+  const campaignStart = parseInt(String(campaign.startTimestamp));
+  const campaignEnd = parseInt(String(campaign.endTimestamp));
+  const campaignDuration = campaignEnd - campaignStart;
 
-  for (const record of dailyRewardsRecords) {
-    const timestamp = parseInt(record.timestamp);
-    if (timestamp >= startTimestamp && timestamp <= endTimestamp) {
-      const usdValue = parseFloat(record.total || 0);
-      if (usdValue > 0) {
-        const monAmount = usdValue / tokenPrice;
-        totalMON += monAmount;
-        totalUSD += usdValue;
-      }
-    }
+  if (campaignDuration <= 0) {
+    return { totalMON: 0 };
   }
 
-  return { totalMON, totalUSD };
+  // Calculate overlap between campaign and query date range
+  const overlapStart = Math.max(campaignStart, queryStartTimestamp);
+  const overlapEnd = Math.min(campaignEnd, queryEndTimestamp);
+  const overlapDuration = Math.max(0, overlapEnd - overlapStart);
+
+  if (overlapDuration <= 0) {
+    return { totalMON: 0 };
+  }
+
+  // Pro-rate the token amount based on overlap
+  // totalMON = totalAmount * (overlapDuration / campaignDuration)
+  const totalAmountNumber = Number(totalAmountWei) / 1e18; // Convert from wei to tokens
+  const proRatedMON = totalAmountNumber * (overlapDuration / campaignDuration);
+
+  return { totalMON: proRatedMON };
 }
 
 /**
@@ -498,8 +506,7 @@ export async function POST(request: NextRequest) {
 
         if (isMonToken) {
           const result = calculateTotalMONSpent(
-            metrics.dailyRewardsRecords || [],
-            rewardToken,
+            campaign,
             startTimestamp,
             endTimestamp
           );

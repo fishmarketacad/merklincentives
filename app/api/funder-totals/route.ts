@@ -78,26 +78,28 @@ export async function GET(request: NextRequest) {
           funderId = campaign.protocol.id.toLowerCase();
         }
 
-        // Only fetch metrics (skip details fetch since we have funder from campaign)
-        const metricsRes = await fetch(`${MERKL_API_BASE}/v4/campaigns/${campaignId}/metrics`);
-        if (!metricsRes.ok) return null;
+        // Calculate MON using pro-rated token amount from campaign
+        // This uses actual token quantity instead of USD/price conversion
+        const totalAmountWei = campaign.amount ? BigInt(campaign.amount) : BigInt(0);
+        if (totalAmountWei === BigInt(0)) return null;
 
-        const metrics = await metricsRes.json();
-        const tokenPrice = parseFloat(campaign.rewardToken?.price || '0');
+        // Get campaign duration (timestamps are in seconds)
+        const campaignStart = parseInt(campaign.startTimestamp) * 1000;
+        const campaignEnd = parseInt(campaign.endTimestamp) * 1000;
+        const campaignDuration = campaignEnd - campaignStart;
 
-        if (tokenPrice <= 0 || !metrics.dailyRewardsRecords) return null;
+        if (campaignDuration <= 0) return null;
 
-        // Sum MON from daily rewards in date range
-        let totalMON = 0;
-        for (const record of metrics.dailyRewardsRecords) {
-          const timestamp = parseInt(record.timestamp) * 1000;
-          if (timestamp >= startTimestamp && timestamp <= endTimestamp) {
-            const usdValue = parseFloat(record.total || '0');
-            if (usdValue > 0) {
-              totalMON += usdValue / tokenPrice;
-            }
-          }
-        }
+        // Calculate overlap between campaign and query date range
+        const overlapStart = Math.max(campaignStart, startTimestamp);
+        const overlapEnd = Math.min(campaignEnd, endTimestamp);
+        const overlapDuration = Math.max(0, overlapEnd - overlapStart);
+
+        if (overlapDuration <= 0) return null;
+
+        // Pro-rate the token amount based on overlap
+        const totalAmountNumber = Number(totalAmountWei) / 1e18; // Convert from wei to tokens
+        const totalMON = totalAmountNumber * (overlapDuration / campaignDuration);
 
         return totalMON > 0 ? { funderId, totalMON } : null;
       } catch (e) {
