@@ -37,10 +37,17 @@ export async function GET(request: NextRequest) {
     }
 
     // Filter campaigns that overlap with date range and are MON tokens
+    // IMPORTANT: Exclude child campaigns to prevent double counting
+    // Merkl creates child campaigns when tokens flow to downstream protocols
     const monTokens = ['MON', 'WMON', 'cWMON'];
-    const relevantCampaigns = campaigns.filter(c => {
+    const relevantCampaigns = campaigns.filter((c: any) => {
       const tokenSymbol = c.rewardToken?.symbol || '';
       if (!monTokens.includes(tokenSymbol)) return false;
+
+      // Skip child campaigns - they are auto-generated and cause double counting
+      if (c.parentCampaignId && c.parentCampaignId !== c.id) {
+        return false;
+      }
 
       const campaignStart = parseInt(c.startTimestamp) * 1000;
       const campaignEnd = parseInt(c.endTimestamp) * 1000;

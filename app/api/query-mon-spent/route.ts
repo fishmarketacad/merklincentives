@@ -392,9 +392,18 @@ export async function POST(request: NextRequest) {
     const monTokenSymbols = ['MON', 'WMON', 'cWMON'];
 
     // Filter campaigns that overlap with date range (include ALL token types)
-    const relevantCampaigns = allCampaigns.filter(campaign => {
+    // IMPORTANT: Exclude child campaigns to prevent double counting
+    // Merkl creates child campaigns when tokens flow to downstream protocols
+    // (e.g., earnAUSD campaign creates children for Neverland, Curvance where earnAUSD is deposited)
+    const relevantCampaigns = allCampaigns.filter((campaign: any) => {
       const rewardToken = campaign.rewardToken;
       if (!rewardToken) return false;
+
+      // Skip child campaigns - they are auto-generated and cause double counting
+      // A campaign is a child if it has a parentCampaignId that differs from its own id
+      if (campaign.parentCampaignId && campaign.parentCampaignId !== campaign.id) {
+        return false;
+      }
 
       const startTime = campaign.startTimestamp ? parseInt(String(campaign.startTimestamp)) : 0;
       const endTime = campaign.endTimestamp ? parseInt(String(campaign.endTimestamp)) : Infinity;
