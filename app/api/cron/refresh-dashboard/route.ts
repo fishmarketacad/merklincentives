@@ -22,6 +22,7 @@ const commonProtocols = [
   'lfj', // LFJ DEX - shows TVL/Volume even without Merkl incentives
   'wlfi', // WLFI - appears as funding protocol only
   'neverland',
+  'balancer',
 ];
 
 // Date utilities
