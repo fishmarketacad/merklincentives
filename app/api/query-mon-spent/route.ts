@@ -468,9 +468,16 @@ export async function POST(request: NextRequest) {
 
       try {
         // Get funder from campaign data first (avoid unnecessary fetch)
+        // Prefer tags[0] over creatorId if creatorId looks like an address (starts with 0x)
         let fundingProtocolId = 'unknown';
-        if (campaign.creator?.creatorId) {
-          fundingProtocolId = campaign.creator.creatorId;
+        const creatorId = campaign.creator?.creatorId;
+        const creatorTag = campaign.creator?.tags?.[0];
+
+        if (creatorTag && (!creatorId || creatorId.startsWith('0x'))) {
+          // Use tag if creatorId is missing or is an address
+          fundingProtocolId = creatorTag;
+        } else if (creatorId) {
+          fundingProtocolId = creatorId;
         } else if (campaign.creator?.tags && campaign.creator.tags.length > 0) {
           fundingProtocolId = campaign.creator.tags[0];
         } else if (campaign.mainProtocolId) {
