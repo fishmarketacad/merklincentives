@@ -1699,7 +1699,7 @@ function HomeContent() {
     const dateRangeFormatted = `${startDateFormatted} - ${endDateFormatted}`;
 
     const csvLines = [
-      `Platform Protocol,Funding Protocol,Market,Incentive (MON),Incentive (USD),External Incentives (USD),APR (%),"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
+      `Platform Protocol,Funding Protocol,Market,Incentive (MON),Incentive (USD),External Incentives (USD),Incentive APR (%),"TVL (as of ${endDateFormatted})","TVL Cost (%)","TVL Cost WoW Change (%)","Volume (${dateRangeFormatted})","Volume Cost (%)","Volume Cost WoW Change (%)"`
     ];
 
     // Group rows by platform protocol for subtotals
@@ -3626,7 +3626,7 @@ ${JSON.stringify(fullInputData, null, 2)}
                     <th className="text-right py-3 px-4 text-sm font-semibold text-gray-300 uppercase">
                       <div className="group relative inline-block ml-auto cursor-help">
                         <button type="button" onClick={(e) => { e.stopPropagation(); handleSort('apr'); }} className="hover:text-white flex items-center gap-1 ml-auto cursor-pointer">
-                          APR (%)
+                          Incentive APR (%)
                           {sortConfig.key === 'apr' && (
                             <span className="text-purple-400">
                               {sortConfig.direction === 'asc' ? '↑' : sortConfig.direction === 'desc' ? '↓' : ''}
@@ -3634,7 +3634,7 @@ ${JSON.stringify(fullInputData, null, 2)}
                           )}
                         </button>
                         <div className="absolute right-0 top-full mt-2 hidden group-hover:block z-[9999] w-64 p-2 bg-gray-900 border border-gray-700 rounded-lg text-xs text-gray-300 shadow-xl pointer-events-none whitespace-normal normal-case text-left">
-                          Annual Percentage Rate for the pool. Shows the expected annual return from providing liquidity.
+                          Incentive APR from Merkl campaigns only. Does not include native yield from underlying vault strategies.
                         </div>
                       </div>
                     </th>
@@ -4075,12 +4075,12 @@ ${JSON.stringify(fullInputData, null, 2)}
                                       const poolId = `${platform.platformProtocol}-${funding.fundingProtocol}-${market.marketName}`;
                                       const tooltip = getAITooltip(poolId, 'tvlCost');
                                       if (tooltip) {
-                                        return `APR (Annual Percentage Rate) represents the annualized return from Merkl incentives. This value shows the APR at the end of your selected date range, calculated from campaign metrics. APR = (Daily Rewards / TVL) × 365 × 100\n\nAI Analysis:\n${tooltip}`;
+                                        return `Incentive APR represents the annualized return from Merkl incentives only. Does not include native yield from underlying vault strategies. This value shows the APR at the end of your selected date range. APR = (Daily Rewards / TVL) × 365 × 100\n\nAI Analysis:\n${tooltip}`;
                                       }
-                                      return "APR (Annual Percentage Rate) represents the annualized return from Merkl incentives. This value shows the APR at the end of your selected date range, calculated from campaign metrics. APR = (Daily Rewards / TVL) × 365 × 100";
+                                      return "Incentive APR represents the annualized return from Merkl incentives only. Does not include native yield from underlying vault strategies. This value shows the APR at the end of your selected date range. APR = (Daily Rewards / TVL) × 365 × 100";
                                     })()}
                                   >
-                                    {market.apr !== undefined && market.apr !== null && typeof market.apr === 'number' ? `${market.apr.toFixed(2)}% APR` : 'APR N/A'}
+                                    {market.apr !== undefined && market.apr !== null && typeof market.apr === 'number' ? `${market.apr.toFixed(2)}%` : 'N/A'}
                                   </span>
                                 )}
                                 {market.tvl !== undefined && (
