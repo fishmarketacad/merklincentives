@@ -79,6 +79,37 @@ interface DashboardCache {
   timestamp: number;
 }
 
+// Funder address to protocol name mapping
+// These are Safe multisig wallets or EOAs that fund campaigns on Monad
+const FUNDER_ADDRESS_MAP: Record<string, string> = {
+  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'Neverland', // Neverland Safe multisig (created by Neverland: Deployer)
+  '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'Neverland', // Neverland-associated wallet
+};
+
+// Monad Vision block explorer URL
+const MONAD_VISION_URL = 'https://monadvision.com/address';
+
+// Helper function to get funder display name and URL
+const getFunderInfo = (fundingProtocol: string): { displayName: string; url: string | null; isAddress: boolean } => {
+  const normalized = fundingProtocol.toLowerCase();
+
+  // Check if it's an address (starts with 0x)
+  if (normalized.startsWith('0x') && normalized.length === 42) {
+    const mappedName = FUNDER_ADDRESS_MAP[normalized];
+    const url = `${MONAD_VISION_URL}/${fundingProtocol}`;
+
+    if (mappedName) {
+      return { displayName: mappedName, url, isAddress: true };
+    }
+    // Shorten unknown addresses for display
+    const shortAddress = `${fundingProtocol.slice(0, 6)}...${fundingProtocol.slice(-4)}`;
+    return { displayName: shortAddress, url, isAddress: true };
+  }
+
+  // Not an address, return as-is with no URL
+  return { displayName: fundingProtocol.replace('-', ' '), url: null, isAddress: false };
+};
+
 // Date utility functions for auto-refresh
 const getYesterdayUTC = (): string => {
   const yesterday = new Date();
@@ -3734,7 +3765,19 @@ ${JSON.stringify(fullInputData, null, 2)}
                   {processedTableRows.map((row) => (
                       <tr key={`${row.platform.platformProtocol}-${row.funding.fundingProtocol}-${row.marketIdx}`} className="border-b border-gray-800 hover:bg-gray-800/30">
                             <td className="py-3 px-4 text-sm text-white capitalize">{row.platform.platformProtocol.replace('-', ' ')}</td>
-                            <td className="py-3 px-4 text-sm text-gray-300 capitalize">{row.funding.fundingProtocol.replace('-', ' ')}</td>
+                            <td className="py-3 px-4 text-sm text-gray-300 capitalize">
+                              {(() => {
+                                const funderInfo = getFunderInfo(row.funding.fundingProtocol);
+                                if (funderInfo.url) {
+                                  return (
+                                    <a href={funderInfo.url} target="_blank" rel="noopener noreferrer" className="hover:text-purple-400 underline">
+                                      {funderInfo.displayName}
+                                    </a>
+                                  );
+                                }
+                                return funderInfo.displayName;
+                              })()}
+                            </td>
                             <td className="py-3 px-4 text-sm text-gray-400">
                               {row.market.merklUrl ? (
                                 <a href={row.market.merklUrl} target="_blank" rel="noopener noreferrer" className="hover:text-purple-400 underline">
@@ -4039,7 +4082,17 @@ ${JSON.stringify(fullInputData, null, 2)}
                         <div className="flex justify-between items-center mb-1">
                           <h4 className="text-md font-semibold text-gray-200 capitalize flex items-center gap-2">
                             <span className="w-1.5 h-1.5 bg-purple-400 rounded-full"></span>
-                            Funded by: <span className="text-purple-400">{funding.fundingProtocol.replace('-', ' ')}</span>
+                            Funded by: {(() => {
+                              const funderInfo = getFunderInfo(funding.fundingProtocol);
+                              if (funderInfo.url) {
+                                return (
+                                  <a href={funderInfo.url} target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 underline">
+                                    {funderInfo.displayName}
+                                  </a>
+                                );
+                              }
+                              return <span className="text-purple-400">{funderInfo.displayName}</span>;
+                            })()}
                           </h4>
                           <span className="text-sm font-bold text-gray-300 bg-gray-800 px-3 py-1 rounded-lg">
                             {funding.totalMON.toLocaleString(undefined, {
