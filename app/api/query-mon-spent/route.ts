@@ -18,6 +18,7 @@ const MONAD_CHAIN_ID = 143;
 const FUNDER_ADDRESS_MAP: Record<string, string> = {
   '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'neverland', // Neverland Safe multisig
   '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'neverland', // Neverland-associated wallet
+  '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'neverland', // Neverland funder wallet
 };
 
 interface Campaign {

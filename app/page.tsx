@@ -84,6 +84,7 @@ interface DashboardCache {
 const FUNDER_ADDRESS_MAP: Record<string, string> = {
   '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'Neverland', // Neverland Safe multisig (created by Neverland: Deployer)
   '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'Neverland', // Neverland-associated wallet
+  '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'Neverland', // Neverland funder wallet
 };
 
 // Monad Vision block explorer URL
