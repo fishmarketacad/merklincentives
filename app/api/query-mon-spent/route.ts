@@ -13,6 +13,13 @@ import {
 const MERKL_API_BASE = 'https://api.merkl.xyz';
 const MONAD_CHAIN_ID = 143;
 
+// Funder address to protocol name mapping
+// Maps campaign creator addresses to human-readable protocol names
+const FUNDER_ADDRESS_MAP: Record<string, string> = {
+  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'neverland', // Neverland Safe multisig
+  '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'neverland', // Neverland-associated wallet
+};
+
 interface Campaign {
   id?: string;
   campaignId?: string;
@@ -482,6 +489,13 @@ export async function POST(request: NextRequest) {
           fundingProtocolId = campaign.creator.tags[0];
         } else if (campaign.mainProtocolId) {
           fundingProtocolId = campaign.mainProtocolId;
+        }
+
+        // Apply funder address mapping (convert addresses to protocol names)
+        const normalizedFunderId = fundingProtocolId.toLowerCase();
+        const mappedFunder = FUNDER_ADDRESS_MAP[normalizedFunderId];
+        if (mappedFunder) {
+          fundingProtocolId = mappedFunder;
         }
 
         // Fetch opportunity and metrics in parallel

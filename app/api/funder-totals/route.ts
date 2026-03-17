@@ -3,6 +3,13 @@ import { NextRequest, NextResponse } from 'next/server';
 const MERKL_API_BASE = 'https://api.merkl.xyz';
 const MONAD_CHAIN_ID = 143;
 
+// Funder address to protocol name mapping
+// Maps campaign creator addresses to human-readable protocol names
+const FUNDER_ADDRESS_MAP: Record<string, string> = {
+  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'neverland', // Neverland Safe multisig
+  '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'neverland', // Neverland-associated wallet
+};
+
 /**
  * Fast endpoint to get total MON distributed by each funder
  * Returns aggregated totals without detailed breakdowns
@@ -81,6 +88,12 @@ export async function GET(request: NextRequest) {
           funderId = campaign.mainProtocolId.toLowerCase();
         } else if (campaign.protocol?.id) {
           funderId = campaign.protocol.id.toLowerCase();
+        }
+
+        // Apply funder address mapping (convert addresses to protocol names)
+        const mappedFunder = FUNDER_ADDRESS_MAP[funderId];
+        if (mappedFunder) {
+          funderId = mappedFunder;
         }
 
         // Calculate MON using pro-rated token amount from campaign
