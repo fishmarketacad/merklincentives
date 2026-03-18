@@ -1875,6 +1875,48 @@ function HomeContent() {
       );
     }
 
+    // Add LFJ if not already in the data (no Merkl campaigns but we want TVL/Volume)
+    if (!groupedByProtocol['lfj'] && !groupedByProtocol['LFJ']) {
+      const lfjTVL = protocolTVL['lfj'];
+      const lfjDexVolume = protocolDEXVolume['lfj'];
+      const lfjVolume = lfjDexVolume?.volumeInRange ?? lfjDexVolume?.volume7d ?? lfjDexVolume?.volume30d ?? null;
+
+      if (lfjTVL || lfjVolume) {
+        const lfjTVLFormatted = lfjTVL !== null && lfjTVL !== undefined && lfjTVL > 0 ? lfjTVL.toFixed(2) : '';
+        const lfjVolumeFormatted = lfjVolume !== null ? lfjVolume.toFixed(2) : '';
+        csvLines.push(`lfj,none,,"LFJ Protocol (No Merkl Campaigns)",0,"","","","${lfjTVLFormatted}","","","${lfjVolumeFormatted}","",""`);
+        csvLines.push(`lfj PROTOCOL TOTAL,,,,,,,,\"${lfjTVLFormatted}\",,,\"${lfjVolumeFormatted}\",,`);
+      }
+    }
+
+    // Add specific Uniswap pools with TVL/Volume if available
+    const specificUniswapPools = [
+      'WBTC/USDC',
+      'wstETH/MON',
+      'WBTC/AUSD',
+      'USDT0/XAUt0',
+      'cbBTC/MON'
+    ];
+
+    // Check if these pools exist in marketVolumes
+    for (const poolName of specificUniswapPools) {
+      const marketKey = `uniswap-${poolName}`;
+      const marketVolume = marketVolumes[marketKey];
+
+      // Try to find in existing results
+      const existingPool = processedTableRows.find(row =>
+        row.platform.platformProtocol.toLowerCase() === 'uniswap' &&
+        row.market.marketName.toLowerCase().includes(poolName.toLowerCase().replace('/', '-'))
+      );
+
+      // If pool doesn't exist in results but we want to track it, add a placeholder row
+      // This will show "Not in Merkl" but can still show TVL/Volume if available from other sources
+      if (!existingPool && marketVolume) {
+        const volumeFormatted = marketVolume.volumeInRange?.toFixed(2) || marketVolume.volume7d?.toFixed(2) || '';
+        csvLines.push(`uniswap,none,,"UniswapV4 ${poolName} (Tracked Pool)",0,"","","","","","","${volumeFormatted}","",""`);
+      }
+    }
+
     const csv = csvLines.join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
