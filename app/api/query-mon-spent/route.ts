@@ -17,9 +17,9 @@ const MONAD_CHAIN_ID = 143;
 // Maps campaign creator addresses to human-readable protocol names
 const FUNDER_ADDRESS_MAP: Record<string, string> = {
   // Neverland addresses
-  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'neverland', // Neverland Safe multisig
+  '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'neverland', // Revenue multisig - MON/USDC Foundational incentives
+  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'neverland', // Partnerships multisig - DUST rewards to Balancer
   '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'neverland', // Neverland-associated wallet
-  '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'neverland', // Neverland funder wallet
   // Balancer addresses
   '0xf3b4829c8b9e2910c2396538f49a12b0c2475a7e': 'balancer', // Balancer v3 Safe multisig
 };
@@ -408,7 +408,8 @@ export async function POST(request: NextRequest) {
     }
 
     // MON token symbols - used to separate MON incentives from external incentives
-    const monTokenSymbols = ['MON', 'WMON', 'cWMON'];
+    // Includes nWMON (Neverland Interest Bearing WMON)
+    const monTokenSymbols = ['MON', 'WMON', 'cWMON', 'nWMON'];
 
     // Filter campaigns that overlap with date range (include ALL token types)
     // IMPORTANT: Exclude child campaigns to prevent double counting

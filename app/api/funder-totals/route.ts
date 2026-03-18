@@ -7,9 +7,9 @@ const MONAD_CHAIN_ID = 143;
 // Maps campaign creator addresses to human-readable protocol names
 const FUNDER_ADDRESS_MAP: Record<string, string> = {
   // Neverland addresses
-  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'neverland', // Neverland Safe multisig
+  '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'neverland', // Revenue multisig - MON/USDC Foundational incentives
+  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'neverland', // Partnerships multisig - DUST rewards to Balancer
   '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'neverland', // Neverland-associated wallet
-  '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'neverland', // Neverland funder wallet
   // Balancer addresses
   '0xf3b4829c8b9e2910c2396538f49a12b0c2475a7e': 'balancer', // Balancer v3 Safe multisig
   // Note: 0x6cfe163e... (145 WMON) funds PancakeSwap - unknown small funder
@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
     // Filter campaigns that overlap with date range and are MON tokens
     // IMPORTANT: Exclude child campaigns to prevent double counting
     // Merkl creates child campaigns when tokens flow to downstream protocols
-    const monTokens = ['MON', 'WMON', 'cWMON'];
+    const monTokens = ['MON', 'WMON', 'cWMON', 'nWMON'];
     const relevantCampaigns = campaigns.filter((c: any) => {
       const tokenSymbol = c.rewardToken?.symbol || '';
       if (!monTokens.includes(tokenSymbol)) return false;

@@ -83,9 +83,9 @@ interface DashboardCache {
 // These are Safe multisig wallets or EOAs that fund campaigns on Monad
 const FUNDER_ADDRESS_MAP: Record<string, string> = {
   // Neverland addresses
-  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'Neverland', // Neverland Safe multisig (created by Neverland: Deployer)
+  '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'Neverland', // Revenue multisig - MON/USDC Foundational incentives
+  '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'Neverland', // Partnerships multisig - DUST rewards to Balancer
   '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'Neverland', // Neverland-associated wallet
-  '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'Neverland', // Neverland funder wallet
   // Balancer addresses
   '0xf3b4829c8b9e2910c2396538f49a12b0c2475a7e': 'Balancer', // Balancer v3 Safe multisig
 };
@@ -1889,7 +1889,7 @@ function HomeContent() {
       }
     }
 
-    // Add specific Uniswap pools with TVL/Volume if available
+    // Add specific Uniswap pools with TVL/Volume if available (using The Graph historical data)
     const specificUniswapPools = [
       'WBTC/USDC',
       'wstETH/MON',
@@ -1898,22 +1898,27 @@ function HomeContent() {
       'cbBTC/MON'
     ];
 
-    // Check if these pools exist in marketVolumes
+    // Check if these pools exist in results or have TVL data from The Graph
     for (const poolName of specificUniswapPools) {
-      const marketKey = `uniswap-${poolName}`;
-      const marketVolume = marketVolumes[marketKey];
-
       // Try to find in existing results
       const existingPool = processedTableRows.find(row =>
         row.platform.platformProtocol.toLowerCase() === 'uniswap' &&
         row.market.marketName.toLowerCase().includes(poolName.toLowerCase().replace('/', '-'))
       );
 
-      // If pool doesn't exist in results but we want to track it, add a placeholder row
-      // This will show "Not in Merkl" but can still show TVL/Volume if available from other sources
-      if (!existingPool && marketVolume) {
-        const volumeFormatted = marketVolume.volumeInRange?.toFixed(2) || marketVolume.volume7d?.toFixed(2) || '';
-        csvLines.push(`uniswap,none,,"UniswapV4 ${poolName} (Tracked Pool)",0,"","","","","","","${volumeFormatted}","",""`);
+      // Get TVL from The Graph (uniswapHistoricalTVL uses format like "WBTC-USDC")
+      const graphPoolKey = poolName.replace('/', '-').toUpperCase();
+      const graphTvl = uniswapHistoricalTVL[graphPoolKey];
+
+      // Get volume from marketVolumes
+      const marketKey = `uniswap_${poolName.toLowerCase().replace('/', '-')}`;
+      const marketVolume = marketVolumes[marketKey];
+
+      // If pool doesn't exist in results but we have TVL or Volume data, add a row
+      if (!existingPool && (graphTvl || marketVolume)) {
+        const tvlFormatted = graphTvl && graphTvl > 0 ? graphTvl.toFixed(2) : '';
+        const volumeFormatted = marketVolume?.volumeInRange?.toFixed(2) || marketVolume?.volume7d?.toFixed(2) || '';
+        csvLines.push(`uniswap,none,,"UniswapV4 ${poolName} (Tracked Pool)",0,"","","","${tvlFormatted}","","","${volumeFormatted}","",""`);
       }
     }
 

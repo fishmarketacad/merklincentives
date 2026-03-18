@@ -16,6 +16,7 @@ const TRACKED_POOLS: Record<string, { name: string; poolId: string }> = {
   'wstETH-MON': { name: 'wstETH-MON', poolId: '0xbfd64af1b32c101eeff4f7d51a0f1f522c6a6cdf4de45ae340a58c3d1309032c' },
   'WBTC-AUSD': { name: 'WBTC-AUSD', poolId: '0x6fed390faee91596851fdf2fa74c0f799d6bbe4f317b7d6ab16ef31fc974e4da' },
   'USDT0-XAUt0': { name: 'USDT0-XAUt0', poolId: '0xe3b329308be3b1b2bcc5a3a5301e905051bb2c04f145b33b39558baa1113bb78' },
+  'cbBTC-MON': { name: 'cbBTC-MON', poolId: '0x45be07f23e76fc8d5f0de2164381805ef1ab5bc956b710e63d1a7d445065601a' },
 };
 
 const SUBGRAPH_ID = '6CQtx9W4b9Kn9cjznXJNLeTvLV1hbpxkaJZkbyXirJuz';
