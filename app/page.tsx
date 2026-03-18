@@ -82,9 +82,14 @@ interface DashboardCache {
 // Funder address to protocol name mapping
 // These are Safe multisig wallets or EOAs that fund campaigns on Monad
 const FUNDER_ADDRESS_MAP: Record<string, string> = {
+  // Neverland addresses
   '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'Neverland', // Neverland Safe multisig (created by Neverland: Deployer)
   '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'Neverland', // Neverland-associated wallet
   '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'Neverland', // Neverland funder wallet
+  '0x6cfe163eaf9ab5ae485f4c381e819a07b2b5566e': 'Neverland', // Neverland funder (suspected)
+  '0x51ee1ae189bec5b2b86266b03fabed35fd859f71': 'Neverland', // Neverland funder (suspected)
+  // Balancer addresses
+  '0xf3b4829c8b9e2910c2396538f49a12b0c2475a7e': 'Balancer', // Balancer v3 Safe multisig
 };
 
 // Monad Vision block explorer URL
