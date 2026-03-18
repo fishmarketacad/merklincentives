@@ -10,10 +10,10 @@ const FUNDER_ADDRESS_MAP: Record<string, string> = {
   '0xb83a6637c87e6a7192b3ada845c0745f815e9006': 'neverland', // Neverland Safe multisig
   '0xcb69535abbc95a042914507f963bdd74ad0025ff': 'neverland', // Neverland-associated wallet
   '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb': 'neverland', // Neverland funder wallet
-  '0x6cfe163eaf9ab5ae485f4c381e819a07b2b5566e': 'neverland', // Neverland funder (suspected)
-  '0x51ee1ae189bec5b2b86266b03fabed35fd859f71': 'neverland', // Neverland funder (suspected)
   // Balancer addresses
   '0xf3b4829c8b9e2910c2396538f49a12b0c2475a7e': 'balancer', // Balancer v3 Safe multisig
+  // Note: 0x6cfe163e... (145 WMON) funds PancakeSwap - unknown small funder
+  // Note: 0x51ee1ae1... (2425 WMON) funds credit-back campaign - unknown small funder
 };
 
 /**
