@@ -1,7 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const MERKL_API_BASE = 'https://api.merkl.xyz';
+const MERKL_API_PRIMARY = 'https://api.merkl.xyz';
+const MERKL_API_FALLBACK = 'https://api.merkl.fr';
 const MONAD_CHAIN_ID = 143;
+
+/**
+ * Detect if API response indicates partial failure
+ * Partial failure = API returns data but with unresolved/missing metadata
+ */
+function isPartialFailure(campaigns: any[]): boolean {
+  if (!campaigns || campaigns.length === 0) return false;
+
+  const samplesToCheck = campaigns.slice(0, Math.min(5, campaigns.length));
+  let failureIndicators = 0;
+
+  for (const campaign of samplesToCheck) {
+    // Check 1: Creator has address but empty tags when it should have tags
+    const creator = campaign.creator;
+    if (creator?.creatorId?.startsWith('0x') && (!creator.tags || creator.tags.length === 0)) {
+      failureIndicators++;
+    }
+
+    // Check 2: Opportunity name is just a numeric ID
+    const opportunityName = campaign.opportunity?.name || '';
+    if (opportunityName && /^Market\s+\d+$/.test(opportunityName)) {
+      failureIndicators++;
+    }
+  }
+
+  const failureRate = failureIndicators / (samplesToCheck.length * 2);
+  console.log(`[Funder Totals] Partial failure check: ${failureIndicators} indicators, ${(failureRate * 100).toFixed(1)}% failure rate`);
+  return failureRate > 0.4;
+}
 
 // Funder address to protocol name mapping
 // Maps campaign creator addresses to human-readable protocol names
@@ -30,16 +60,41 @@ export async function GET(request: NextRequest) {
 
   try {
     // Fetch all campaigns (this is fast - just metadata)
+    // Try primary API first, fallback to api.merkl.fr if partial failure detected
     const campaigns: any[] = [];
     let page = 0;
     let hasMore = true;
+    let currentApiBase = MERKL_API_PRIMARY;
+    let usedFallback = false;
 
     while (hasMore) {
-      const url = `${MERKL_API_BASE}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100`;
+      const url = `${currentApiBase}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100`;
       const response = await fetch(url);
       const data = await response.json();
 
-      const pageCampaigns = Array.isArray(data) ? data : (data.data || []);
+      let pageCampaigns = Array.isArray(data) ? data : (data.data || []);
+
+      // On first page, check for partial failure and switch to fallback if needed
+      if (page === 0 && currentApiBase === MERKL_API_PRIMARY && isPartialFailure(pageCampaigns)) {
+        console.log('[Funder Totals] Partial failure detected on primary API, trying fallback...');
+        currentApiBase = MERKL_API_FALLBACK;
+        usedFallback = true;
+
+        // Retry first page with fallback
+        const fallbackUrl = `${currentApiBase}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100`;
+        const fallbackResponse = await fetch(fallbackUrl);
+        const fallbackData = await fallbackResponse.json();
+        pageCampaigns = Array.isArray(fallbackData) ? fallbackData : (fallbackData.data || []);
+
+        // If fallback also fails, use primary data anyway
+        if (isPartialFailure(pageCampaigns)) {
+          console.log('[Funder Totals] Fallback also shows partial failure, using primary API data');
+          currentApiBase = MERKL_API_PRIMARY;
+          usedFallback = false;
+          pageCampaigns = Array.isArray(data) ? data : (data.data || []);
+        }
+      }
+
       if (pageCampaigns.length === 0) {
         hasMore = false;
       } else {
@@ -47,6 +102,10 @@ export async function GET(request: NextRequest) {
         hasMore = pageCampaigns.length >= 100;
         page++;
       }
+    }
+
+    if (usedFallback) {
+      console.log('[Funder Totals] Used fallback API: api.merkl.fr');
     }
 
     // Filter campaigns that overlap with date range and are MON tokens

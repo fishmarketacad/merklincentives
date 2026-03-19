@@ -10,8 +10,71 @@ import {
   cacheMerklOpportunity
 } from '@/app/lib/cache';
 
-const MERKL_API_BASE = 'https://api.merkl.xyz';
+const MERKL_API_PRIMARY = 'https://api.merkl.xyz';
+const MERKL_API_FALLBACK = 'https://api.merkl.fr';
+let MERKL_API_BASE = MERKL_API_PRIMARY; // Can be switched to fallback
 const MONAD_CHAIN_ID = 143;
+
+/**
+ * Detect if API response indicates partial failure
+ * Partial failure = API returns data but with unresolved/missing metadata
+ */
+function isPartialFailure(campaigns: any[]): boolean {
+  if (!campaigns || campaigns.length === 0) return false;
+
+  // Sample first few campaigns to check for partial failure indicators
+  const samplesToCheck = campaigns.slice(0, Math.min(5, campaigns.length));
+  let failureIndicators = 0;
+
+  for (const campaign of samplesToCheck) {
+    // Check 1: Market/opportunity name is just a numeric ID (no token symbols)
+    const opportunityName = campaign.opportunity?.name || '';
+    if (opportunityName && /^Market\s+\d+$/.test(opportunityName)) {
+      failureIndicators++;
+    }
+
+    // Check 2: Creator has address but empty tags array when it should have tags
+    const creator = campaign.creator;
+    if (creator?.creatorId?.startsWith('0x') && (!creator.tags || creator.tags.length === 0)) {
+      // Check if this is a known protocol address that should have tags
+      const knownProtocolAddresses = [
+        '0x909b176220b7e782c0f3ceccab4b19d2c433c6bb',
+        '0xb83a6637c87e6a7192b3ada845c0745f815e9006',
+        '0xf3b4829c8b9e2910c2396538f49a12b0c2475a7e',
+      ];
+      if (knownProtocolAddresses.some(addr => creator.creatorId.toLowerCase().includes(addr))) {
+        failureIndicators++;
+      }
+    }
+
+    // Check 3: Opportunity identifier is missing when opportunityId exists
+    if (campaign.opportunityId && !campaign.opportunity?.identifier) {
+      failureIndicators++;
+    }
+  }
+
+  // If more than 40% of samples show failure indicators, consider it partial failure
+  const failureRate = failureIndicators / (samplesToCheck.length * 3); // 3 checks per campaign
+  console.log(`[Merkl API] Partial failure check: ${failureIndicators} indicators, ${(failureRate * 100).toFixed(1)}% failure rate`);
+  return failureRate > 0.4;
+}
+
+/**
+ * Switch to fallback API if primary is partially down
+ */
+function switchToFallbackAPI(): void {
+  if (MERKL_API_BASE !== MERKL_API_FALLBACK) {
+    console.log('[Merkl API] Switching to fallback API: api.merkl.fr');
+    MERKL_API_BASE = MERKL_API_FALLBACK;
+  }
+}
+
+/**
+ * Reset to primary API (call periodically to retry primary)
+ */
+function resetToPrimaryAPI(): void {
+  MERKL_API_BASE = MERKL_API_PRIMARY;
+}
 
 // Funder address to protocol name mapping
 // Maps campaign creator addresses to human-readable protocol names
@@ -115,12 +178,42 @@ async function fetchCampaigns(protocolId: string, endDate?: string, noCache?: bo
       if (pageCampaigns.length === 0) {
         hasMore = false;
       } else {
+        // Check for partial failure on first page and switch to fallback if needed
+        if (page === 0 && MERKL_API_BASE === MERKL_API_PRIMARY && isPartialFailure(pageCampaigns)) {
+          console.log('[Merkl API] Partial failure detected on primary API, retrying with fallback...');
+          switchToFallbackAPI();
+          // Retry this page with fallback API
+          const fallbackUrl = protocolId === 'all'
+            ? `${MERKL_API_BASE}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&page=${page}&items=100`
+            : `${MERKL_API_BASE}/v4/campaigns?chainId=${MONAD_CHAIN_ID}&mainProtocolId=${protocolId}&page=${page}&items=100`;
+
+          const fallbackResponse = await globalThis.fetch(fallbackUrl);
+          const fallbackData = await fallbackResponse.json();
+
+          if (Array.isArray(fallbackData)) {
+            pageCampaigns = fallbackData;
+          } else if (fallbackData.data && Array.isArray(fallbackData.data)) {
+            pageCampaigns = fallbackData.data;
+          } else if (fallbackData.campaigns && Array.isArray(fallbackData.campaigns)) {
+            pageCampaigns = fallbackData.campaigns;
+          }
+
+          // Check if fallback also has partial failure (if so, use primary anyway)
+          if (isPartialFailure(pageCampaigns)) {
+            console.log('[Merkl API] Fallback also shows partial failure, using primary API data');
+            resetToPrimaryAPI();
+          }
+        }
+
         campaigns.push(...pageCampaigns);
         // Determine if this is historical data (endDate is in the past)
         // Historical campaigns never change, so cache longer
         const isHistorical = endDate ? (new Date(endDate).getTime() < Date.now() - 86400000) : false; // More than 1 day ago
-        await cacheMerklCampaigns(protocolId, page, pageCampaigns, isHistorical);
-        
+        // Only cache if not partial failure
+        if (!isPartialFailure(pageCampaigns)) {
+          await cacheMerklCampaigns(protocolId, page, pageCampaigns, isHistorical);
+        }
+
         if (pageCampaigns.length < 100) {
           hasMore = false;
         } else {
@@ -132,10 +225,19 @@ async function fetchCampaigns(protocolId: string, endDate?: string, noCache?: bo
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
       console.error(`Error fetching campaigns page ${page}:`, error);
+      // On error, try fallback API if not already using it
+      if (MERKL_API_BASE === MERKL_API_PRIMARY) {
+        console.log('[Merkl API] Primary API error, switching to fallback...');
+        switchToFallbackAPI();
+        // Don't set hasMore to false, retry with fallback
+        continue;
+      }
       hasMore = false;
     }
   }
 
+  // Reset to primary API for next request (to retry primary each time)
+  resetToPrimaryAPI();
   return campaigns;
 }
 
