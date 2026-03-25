@@ -202,11 +202,15 @@ async function fetchEpochData(epoch: Epoch, baseUrl: string): Promise<EpochData>
     });
     if (uniswapResponse.ok) {
       const uniswapData = await uniswapResponse.json();
-      // Map pool names to TVL values
+      // Map pool names to TVL values, aggregating pools with same base token pair
+      // (e.g., AUSD-XAUt0 and AUSD-XAUt0-hook should be combined)
       for (const [poolName, poolInfo] of Object.entries(uniswapData.pools || {})) {
-        uniswapPoolTvl[poolName] = (poolInfo as { tvlUSD: number }).tvlUSD;
+        const tvl = (poolInfo as { tvlUSD: number }).tvlUSD;
+        // Strip suffix like "-hook" to get base pool name
+        const basePoolName = poolName.replace(/-hook$/i, '');
+        uniswapPoolTvl[basePoolName] = (uniswapPoolTvl[basePoolName] || 0) + tvl;
       }
-      console.log('[EpochData] Uniswap pool TVLs fetched:', Object.keys(uniswapPoolTvl).length);
+      console.log('[EpochData] Uniswap pool TVLs fetched:', Object.keys(uniswapPoolTvl).length, '(aggregated)');
     } else {
       console.log('[EpochData] Uniswap TVL fetch failed (may need THEGRAPH_API_KEY)');
     }

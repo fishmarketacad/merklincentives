@@ -26,10 +26,11 @@ interface ProtocolData {
 interface PoolEfficiency {
   name: string;
   protocol: string;
+  funder: string;
   incentiveMON: number;
   incentiveUSD: number;
   tvl: number;
-  bpsPerDay: number; // basis points per day
+  annualizedCost: number; // annualized cost = (weekly incentive * 52) / TVL as percentage
 }
 
 interface TVLTierData {
@@ -104,6 +105,13 @@ function AnalyticsContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Table interaction state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortColumn, setSortColumn] = useState<'name' | 'protocol' | 'funder' | 'tvl' | 'incentiveUSD' | 'annualizedCost'>('annualizedCost');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [filterProtocol, setFilterProtocol] = useState<string>('all');
+  const [filterFunder, setFilterFunder] = useState<string>('all');
+
   // Fetch MON price on mount
   useEffect(() => {
     const fetchMonPrice = async () => {
@@ -167,6 +175,10 @@ function AnalyticsContent() {
           const processedProtocols: ProtocolData[] = [];
           const processedPools: PoolEfficiency[] = [];
 
+          // Calculate number of weeks in date range for annualization
+          const days = Math.max(1, Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+          const weeks = days / 7;
+
           for (const result of monData.results || []) {
             const protocol = result.platformProtocol;
             const totalMON = result.totalMON || 0;
@@ -174,24 +186,26 @@ function AnalyticsContent() {
             let poolCount = 0;
 
             for (const funding of result.fundingProtocols || []) {
+              const funder = funding.fundingProtocol || 'unknown';
               for (const market of funding.markets || []) {
                 poolCount++;
                 const marketMON = market.totalMON || 0;
                 const marketTVL = market.tvl || 0;
 
                 if (marketTVL > 0 && marketMON > 0) {
-                  // Calculate bps/day = (incentive USD / TVL) * 10000 / days
-                  const days = Math.max(1, Math.floor((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1);
+                  // Calculate annualized cost = (incentive per week * 52) / TVL as percentage
                   const incentiveUSD = marketMON * priceNum;
-                  const bpsPerDay = (incentiveUSD / marketTVL) * 10000 / days;
+                  const weeklyIncentive = incentiveUSD / weeks;
+                  const annualizedCost = ((weeklyIncentive * 52) / marketTVL) * 100;
 
                   processedPools.push({
                     name: market.marketName,
                     protocol,
+                    funder,
                     incentiveMON: marketMON,
                     incentiveUSD,
                     tvl: marketTVL,
-                    bpsPerDay,
+                    annualizedCost,
                   });
                 }
               }
@@ -209,7 +223,7 @@ function AnalyticsContent() {
           }
 
           setProtocolData(processedProtocols.sort((a, b) => b.totalMON - a.totalMON));
-          setPoolEfficiency(processedPools.sort((a, b) => b.bpsPerDay - a.bpsPerDay));
+          setPoolEfficiency(processedPools.sort((a, b) => b.annualizedCost - a.annualizedCost));
 
           // Calculate TVL tier distribution
           const tiers = [
@@ -277,7 +291,7 @@ function AnalyticsContent() {
       .map(p => ({
         x: p.tvl,
         y: p.incentiveUSD,
-        z: p.bpsPerDay,
+        z: p.annualizedCost,
         name: `${p.protocol}: ${p.name}`,
       }));
   }, [poolEfficiency]);
@@ -285,6 +299,78 @@ function AnalyticsContent() {
   const totalMONSpent = useMemo(() => {
     return Object.values(funderTotals).reduce((sum, val) => sum + val, 0);
   }, [funderTotals]);
+
+  // Get unique protocols and funders for filters
+  const uniqueProtocols = useMemo(() => {
+    const protocols = new Set(poolEfficiency.map(p => p.protocol));
+    return ['all', ...Array.from(protocols).sort()];
+  }, [poolEfficiency]);
+
+  const uniqueFunders = useMemo(() => {
+    const funders = new Set(poolEfficiency.map(p => p.funder));
+    return ['all', ...Array.from(funders).sort()];
+  }, [poolEfficiency]);
+
+  // Filtered and sorted pool data
+  const filteredSortedPools = useMemo(() => {
+    let filtered = poolEfficiency;
+
+    // Apply search filter
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(query) ||
+        p.protocol.toLowerCase().includes(query) ||
+        p.funder.toLowerCase().includes(query)
+      );
+    }
+
+    // Apply protocol filter
+    if (filterProtocol !== 'all') {
+      filtered = filtered.filter(p => p.protocol === filterProtocol);
+    }
+
+    // Apply funder filter
+    if (filterFunder !== 'all') {
+      filtered = filtered.filter(p => p.funder === filterFunder);
+    }
+
+    // Apply sorting
+    return [...filtered].sort((a, b) => {
+      let comparison = 0;
+      switch (sortColumn) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'protocol':
+          comparison = a.protocol.localeCompare(b.protocol);
+          break;
+        case 'funder':
+          comparison = a.funder.localeCompare(b.funder);
+          break;
+        case 'tvl':
+          comparison = a.tvl - b.tvl;
+          break;
+        case 'incentiveUSD':
+          comparison = a.incentiveUSD - b.incentiveUSD;
+          break;
+        case 'annualizedCost':
+          comparison = a.annualizedCost - b.annualizedCost;
+          break;
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [poolEfficiency, searchQuery, filterProtocol, filterFunder, sortColumn, sortDirection]);
+
+  // Handle column header click for sorting
+  const handleSort = (column: typeof sortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('desc');
+    }
+  };
 
   const priceNum = parseFloat(monPrice) || 0.025;
 
@@ -466,7 +552,7 @@ function AnalyticsContent() {
               {/* TVL vs Incentive Scatter */}
               <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-700/50 p-6">
                 <h2 className="text-xl font-bold text-white mb-4">TVL vs Incentive Cost</h2>
-                <p className="text-gray-400 text-sm mb-4">Identify efficiency anomalies - bubble size = bps/day</p>
+                <p className="text-gray-400 text-sm mb-4">Identify efficiency anomalies - bubble size = annualized cost %</p>
                 <div className="h-72">
                   <ResponsiveContainer width="100%" height="100%">
                     <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
@@ -486,7 +572,7 @@ function AnalyticsContent() {
                         stroke="#9ca3af"
                         tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
                       />
-                      <ZAxis type="number" dataKey="z" range={[50, 400]} name="bps/day" />
+                      <ZAxis type="number" dataKey="z" range={[50, 400]} name="Ann. Cost %" />
                       <Tooltip
                         content={({ active, payload }) => {
                           if (active && payload && payload.length) {
@@ -496,7 +582,7 @@ function AnalyticsContent() {
                                 <p className="text-white font-medium text-sm">{data.name}</p>
                                 <p className="text-gray-300 text-sm">TVL: ${data.x.toLocaleString()}</p>
                                 <p className="text-gray-300 text-sm">Incentive: ${data.y.toLocaleString()}</p>
-                                <p className="text-purple-400 text-sm font-medium">{data.z.toFixed(2)} bps/day</p>
+                                <p className="text-purple-400 text-sm font-medium">{data.z.toFixed(2)}% Ann. Cost</p>
                               </div>
                             );
                           }
@@ -510,45 +596,115 @@ function AnalyticsContent() {
               </div>
             </div>
 
-            {/* Top Inefficient Pools Table */}
+            {/* Pool Efficiency Table */}
             <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl shadow-2xl border border-gray-700/50 p-6">
-              <h2 className="text-xl font-bold text-white mb-4">Top 20 Pools by Incentive Efficiency (bps/day)</h2>
-              <p className="text-gray-400 text-sm mb-4">Higher bps/day = more incentive cost relative to TVL</p>
+              <h2 className="text-xl font-bold text-white mb-4">Pool Efficiency Analysis</h2>
+              <p className="text-gray-400 text-sm mb-4">
+                Annualized Cost % = (Weekly Incentive × 52) / TVL × 100
+              </p>
+
+              {/* Search and Filters */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1 uppercase tracking-wide">Search</label>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search pool, protocol, or funder..."
+                    className="w-full px-3 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-purple-500 transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1 uppercase tracking-wide">Protocol</label>
+                  <select
+                    value={filterProtocol}
+                    onChange={(e) => setFilterProtocol(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-purple-500 transition-all"
+                  >
+                    {uniqueProtocols.map(p => (
+                      <option key={p} value={p}>{p === 'all' ? 'All Protocols' : p}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1 uppercase tracking-wide">Funder</label>
+                  <select
+                    value={filterFunder}
+                    onChange={(e) => setFilterFunder(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-purple-500 transition-all"
+                  >
+                    {uniqueFunders.map(f => (
+                      <option key={f} value={f}>{f === 'all' ? 'All Funders' : f}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-end">
+                  <div className="bg-gray-700/30 rounded-lg px-4 py-2 text-sm">
+                    <span className="text-gray-400">Showing </span>
+                    <span className="text-white font-medium">{filteredSortedPools.length}</span>
+                    <span className="text-gray-400"> of {poolEfficiency.length} pools</span>
+                  </div>
+                </div>
+              </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-gray-400 border-b border-gray-700">
-                      <th className="pb-3 font-medium">Pool</th>
-                      <th className="pb-3 font-medium">Protocol</th>
-                      <th className="pb-3 font-medium text-right">TVL</th>
-                      <th className="pb-3 font-medium text-right">Incentive (USD)</th>
-                      <th className="pb-3 font-medium text-right">bps/day</th>
-                      <th className="pb-3 font-medium">Efficiency</th>
+                      <th
+                        className="pb-3 font-medium cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('name')}
+                      >
+                        Pool {sortColumn === 'name' && (sortDirection === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th
+                        className="pb-3 font-medium cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('protocol')}
+                      >
+                        Protocol {sortColumn === 'protocol' && (sortDirection === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th
+                        className="pb-3 font-medium cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('funder')}
+                      >
+                        Funder {sortColumn === 'funder' && (sortDirection === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th
+                        className="pb-3 font-medium text-right cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('tvl')}
+                      >
+                        TVL {sortColumn === 'tvl' && (sortDirection === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th
+                        className="pb-3 font-medium text-right cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('incentiveUSD')}
+                      >
+                        Incentive (USD) {sortColumn === 'incentiveUSD' && (sortDirection === 'asc' ? '↑' : '↓')}
+                      </th>
+                      <th
+                        className="pb-3 font-medium text-right cursor-pointer hover:text-white transition-colors"
+                        onClick={() => handleSort('annualizedCost')}
+                      >
+                        Ann. Cost % {sortColumn === 'annualizedCost' && (sortDirection === 'asc' ? '↑' : '↓')}
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {poolEfficiency.slice(0, 20).map((pool, index) => {
-                      // Determine efficiency color based on bps/day
-                      const isAnomaly = pool.bpsPerDay > 50; // > 50 bps/day is high
-                      const isModerate = pool.bpsPerDay > 20;
+                    {filteredSortedPools.slice(0, 50).map((pool, index) => {
+                      // Color code based on annualized cost thresholds
+                      const isHigh = pool.annualizedCost > 100; // > 100% annual cost
+                      const isModerate = pool.annualizedCost > 50;
                       return (
                         <tr key={index} className="border-b border-gray-700/50 hover:bg-gray-700/20">
-                          <td className="py-3 text-white font-medium">{pool.name}</td>
+                          <td className="py-3 text-white font-medium max-w-[200px] truncate" title={pool.name}>{pool.name}</td>
                           <td className="py-3 text-gray-400">{pool.protocol}</td>
+                          <td className="py-3 text-gray-400">{pool.funder}</td>
                           <td className="py-3 text-right text-gray-300">${pool.tvl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                           <td className="py-3 text-right text-gray-300">${pool.incentiveUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                           <td className="py-3 text-right font-mono">
-                            <span className={isAnomaly ? 'text-red-400' : isModerate ? 'text-amber-400' : 'text-green-400'}>
-                              {pool.bpsPerDay.toFixed(2)}
-                            </span>
-                          </td>
-                          <td className="py-3">
-                            <span className={`px-2 py-1 rounded text-xs font-medium ${
-                              isAnomaly ? 'bg-red-500/20 text-red-400' :
-                              isModerate ? 'bg-amber-500/20 text-amber-400' :
-                              'bg-green-500/20 text-green-400'
-                            }`}>
-                              {isAnomaly ? 'High Cost' : isModerate ? 'Moderate' : 'Efficient'}
+                            <span className={isHigh ? 'text-red-400' : isModerate ? 'text-amber-400' : 'text-green-400'}>
+                              {pool.annualizedCost.toFixed(1)}%
                             </span>
                           </td>
                         </tr>
@@ -556,6 +712,16 @@ function AnalyticsContent() {
                     })}
                   </tbody>
                 </table>
+                {filteredSortedPools.length > 50 && (
+                  <div className="text-center text-gray-400 text-sm mt-4">
+                    Showing top 50 results. Use filters to narrow down.
+                  </div>
+                )}
+                {filteredSortedPools.length === 0 && (
+                  <div className="text-center text-gray-400 text-sm py-8">
+                    No pools match your search criteria.
+                  </div>
+                )}
               </div>
             </div>
           </>

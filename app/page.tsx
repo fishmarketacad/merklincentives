@@ -1467,17 +1467,23 @@ function HomeContent() {
         if (uniswapTvlResponse.ok) {
           const uniswapTvlData = await uniswapTvlResponse.json();
           // Map pool names to TVL values (handle both "MON-USDC" and "USDC-MON" formats)
+          // Also aggregate pools with same token pair (e.g., AUSD-XAUt0 and AUSD-XAUt0-hook)
           for (const [poolName, poolInfo] of Object.entries(uniswapTvlData.pools || {})) {
             const tvl = (poolInfo as { tvlUSD: number }).tvlUSD;
-            uniswapTvlMap[poolName.toUpperCase()] = tvl;
-            // Also add reverse order (e.g., "USDC-MON" for "MON-USDC")
-            const [token0, token1] = poolName.split('-');
+
+            // Extract base token pair (strip suffixes like "-hook")
+            const basePoolName = poolName.replace(/-hook$/i, '').toUpperCase();
+            const [token0, token1] = basePoolName.split('-');
+
+            // Aggregate TVL for pools with same base token pair
+            uniswapTvlMap[basePoolName] = (uniswapTvlMap[basePoolName] || 0) + tvl;
             if (token0 && token1) {
-              uniswapTvlMap[`${token1}-${token0}`.toUpperCase()] = tvl;
+              const reversePair = `${token1}-${token0}`.toUpperCase();
+              uniswapTvlMap[reversePair] = (uniswapTvlMap[reversePair] || 0) + tvl;
             }
           }
           setUniswapHistoricalTVL(uniswapTvlMap);
-          console.log('[Uniswap TVL] Fetched historical TVL for', Object.keys(uniswapTvlMap).length / 2, 'pools');
+          console.log('[Uniswap TVL] Fetched historical TVL for', Object.keys(uniswapTvlMap).length / 2, 'pools (aggregated)');
         }
       } catch (uniswapTvlErr) {
         console.warn('Failed to fetch Uniswap historical TVL:', uniswapTvlErr);
@@ -1535,12 +1541,16 @@ function HomeContent() {
             const prevUniswapTvlResponse = await fetch(`/api/uniswap-tvl?date=${prevEndDate}`);
             if (prevUniswapTvlResponse.ok) {
               const prevUniswapTvlData = await prevUniswapTvlResponse.json();
+              // Aggregate pools with same token pair (e.g., AUSD-XAUt0 and AUSD-XAUt0-hook)
               for (const [poolName, poolInfo] of Object.entries(prevUniswapTvlData.pools || {})) {
                 const tvl = (poolInfo as { tvlUSD: number }).tvlUSD;
-                prevUniswapTvlMap[poolName.toUpperCase()] = tvl;
-                const [token0, token1] = poolName.split('-');
+                const basePoolName = poolName.replace(/-hook$/i, '').toUpperCase();
+                const [token0, token1] = basePoolName.split('-');
+
+                prevUniswapTvlMap[basePoolName] = (prevUniswapTvlMap[basePoolName] || 0) + tvl;
                 if (token0 && token1) {
-                  prevUniswapTvlMap[`${token1}-${token0}`.toUpperCase()] = tvl;
+                  const reversePair = `${token1}-${token0}`.toUpperCase();
+                  prevUniswapTvlMap[reversePair] = (prevUniswapTvlMap[reversePair] || 0) + tvl;
                 }
               }
             }
