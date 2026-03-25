@@ -12,7 +12,7 @@ const TRACKED_POOLS: Record<string, { name: string; poolId: string }> = {
   'AUSD-USDC': { name: 'AUSD-USDC', poolId: '0xd112fde908d7342135fc7297cc53d25bf7a11d6c6e21fe7ac3e73c40f70827e8' }, // 0.0009% fee tier
   'AUSD-USDT0': { name: 'AUSD-USDT0', poolId: '0xe56868928b91fcd5ebeada3d0ec8767f2bbfeb1e7da181203d13f6af76b03bf9' },
   'AUSD-XAUt0': { name: 'AUSD-XAUt0', poolId: '0xe1a8600687e4d06ca4787e5d0ccdacb1d360bfc9ca6ca2a49a688e14d0ef37b4' },
-  'AUSD-XAUt0-hook': { name: 'AUSD-XAUt0-hook', poolId: '0xe86aed36708aaccf578c72bb79b2e3d223afcf28a89a3894b9bf03bba65b9452' }, // Second pool with Uniswap hook
+  'AUSD-XAUt0-hook': { name: 'AUSD-XAUt0-hook', poolId: '0xbb790bd65e290ec6704d731e43fbbbcfa0521c67c608db989767cf22a59a9a92' }, // Second pool with Uniswap hook
   'WBTC-USDC': { name: 'WBTC-USDC', poolId: '0xd77c0f253764f5d5fbc78e13888afcc35c839262e6b21cd02baa9d8551a9898a' },
   'wstETH-MON': { name: 'wstETH-MON', poolId: '0xbfd64af1b32c101eeff4f7d51a0f1f522c6a6cdf4de45ae340a58c3d1309032c' },
   'WBTC-AUSD': { name: 'WBTC-AUSD', poolId: '0x6fed390faee91596851fdf2fa74c0f799d6bbe4f317b7d6ab16ef31fc974e4da' },
